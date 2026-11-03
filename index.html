@@ -1,0 +1,3628 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reise-Tracker</title>
+
+<!-- D3: Projektion und Pfaderzeugung für die SVG-Weltkarte -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<!-- topojson-client: wandelt die TopoJSON-Kartendaten in GeoJSON-Features um -->
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<!-- Playfair Display (Serifen-Titel) + Inter (UI/Fließtext) -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;900&family=IBM+Plex+Sans:wght@400;500;600;700;800&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --bg: #faf8f4;
+    --surface: #ffffff;
+    --border: #ece6da;
+    --text-primary: #2a2420;
+    --text-secondary: #79705f;
+    --accent: #b8512a;
+    --accent-hover: #9c431f;
+    --accent-soft: #f6e9df;
+    --visited: #4a8c63;
+    --visited-soft: #e7f0e9;
+    --wishlist: #c89a3c;
+    --wishlist-soft: #f8f0dd;
+    --wishlist-text: #8a6a24;
+    --map-neutral: #efe9de;
+    --map-unvisited: #e3dccd;
+    --error: #b84a3a;
+    --error-soft: #f9e9e5;
+    --tier-s: #b8512a;
+    --tier-s-soft: #f6e9df;
+    --tier-a: #c9823c;
+    --tier-a-soft: #f8ecd9;
+    --tier-b: #c89a3c;
+    --tier-b-soft: #f8f0dd;
+    --tier-c: #8a9b5e;
+    --tier-c-soft: #eef2e4;
+    --tier-d: #9c938a;
+    --tier-d-soft: #ece8e0;
+    --radius: 10px;
+    --font-display: "Playfair Display", Georgia, "Times New Roman", serif;
+    --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-mono: "Courier Prime", "Courier New", monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    font-family: var(--font-body);
+    color: var(--text-primary);
+    overflow-x: hidden;
+  }
+
+  .app {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 22px;
+  }
+
+  /* --- Header: asymmetrische Titelzeile, keine Karten-Hülle --- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px 40px;
+    padding: 4px 0 22px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-title {
+    max-width: 420px;
+  }
+
+  header h1 {
+    font-family: var(--font-display);
+    font-size: 24px;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: 0;
+    color: var(--text-primary);
+  }
+
+  header .subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 5px 0 0;
+  }
+
+  .global-stat {
+    text-align: right;
+  }
+
+  .stat-label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .global-stat .percent {
+    font-family: var(--font-mono);
+    font-size: 34px;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1;
+    letter-spacing: -0.01em;
+  }
+
+  .percent-accent {
+    width: 22px;
+    height: 2px;
+    background: var(--accent);
+    margin: 8px 0 0 auto;
+  }
+
+  .global-stat .detail {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    margin-top: 7px;
+  }
+
+  .wishlist-note {
+    font-size: 12px;
+    color: var(--wishlist-text);
+    margin-top: 3px;
+  }
+
+  /* --- Layout --- */
+  .secondary-grid {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  @media (max-width: 860px) {
+    .secondary-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 460px) {
+    .app {
+      padding: 16px;
+    }
+    .toggle-btn {
+      padding: 4px 6px;
+      font-size: 10.5px;
+    }
+    .global-stat {
+      text-align: left;
+    }
+    .global-stat .percent {
+      font-size: 30px;
+    }
+    .percent-accent {
+      margin-left: 0;
+    }
+  }
+
+  /* --- Karte --- */
+  .map-section {
+    position: relative;
+    min-height: 320px;
+    padding: 4px 0 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #worldMap {
+    width: 100%;
+    height: auto;
+    display: block;
+    touch-action: none;
+  }
+
+  #worldMap .country {
+    stroke: #ffffff;
+    stroke-width: 0.5;
+    cursor: pointer;
+    transition: opacity 0.15s ease, stroke-width 0.15s ease, fill 0.25s ease;
+  }
+
+  #worldMap .country.neutral {
+    cursor: default;
+  }
+
+  #worldMap .country:not(.neutral):hover {
+    opacity: 0.82;
+    stroke: var(--accent);
+    stroke-width: 1.3;
+  }
+
+  .zoom-controls {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .zoom-btn {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 11px;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  }
+
+  .zoom-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 18px;
+    margin-top: 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .map-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-dot.visited {
+    background: var(--visited);
+  }
+
+  .legend-dot.wishlist {
+    background: var(--wishlist);
+  }
+
+  .legend-dot.unvisited {
+    background: var(--map-unvisited);
+  }
+
+  .tooltip {
+    position: fixed;
+    background: var(--text-primary);
+    color: #fff;
+    padding: 6px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    pointer-events: none;
+    z-index: 50;
+    max-width: 220px;
+  }
+
+  .map-state-card {
+    text-align: center;
+  }
+
+  .spinner {
+    width: 36px;
+    height: 36px;
+    margin: 0 auto 16px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .map-state-card p {
+    margin: 0 0 16px;
+    font-size: 14px;
+    color: var(--text-secondary);
+  }
+
+  .hidden { display: none !important; }
+
+  #searchInput {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text-primary);
+  }
+
+  #searchInput:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .country-list {
+    max-height: 380px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 12px;
+  }
+
+  .continent-group {
+    margin-bottom: 10px;
+  }
+
+  .continent-group:last-child {
+    margin-bottom: 0;
+  }
+
+  .continent-group summary {
+    cursor: pointer;
+    padding: 6px 4px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .continent-group summary::marker {
+    color: var(--text-secondary);
+  }
+
+  .continent-group summary .count {
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  .continent-group .country-row {
+    padding-left: 20px;
+  }
+
+  .country-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 4px;
+    border-radius: 8px;
+  }
+
+  .country-row:hover {
+    background: var(--bg);
+  }
+
+  .country-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .row-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .toggle-btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .toggle-btn svg {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+  }
+
+  .toggle-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .toggle-btn.visited-btn.active {
+    background: var(--visited-soft);
+    border-color: var(--visited);
+    color: var(--visited);
+    font-weight: 600;
+  }
+
+  .toggle-btn.wishlist-btn.active {
+    background: var(--wishlist-soft);
+    border-color: var(--wishlist);
+    color: var(--wishlist-text);
+    font-weight: 600;
+  }
+
+  .stats-card h2,
+  .stamps-card h2 {
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 700;
+    margin: 0 0 16px;
+  }
+
+  .continent-row {
+    margin-bottom: 12px;
+  }
+
+  .continent-row:last-child {
+    margin-bottom: 0;
+  }
+
+  .continent-row-header {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12.5px;
+    margin-bottom: 4px;
+  }
+
+  .continent-row-header span:last-child {
+    color: var(--text-secondary);
+  }
+
+  .progress-track {
+    height: 7px;
+    background: var(--accent-soft);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+  }
+
+  .fun-stats-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .fun-stat-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .fun-stat-icon {
+    font-size: 18px;
+    line-height: 1.4;
+    flex-shrink: 0;
+  }
+
+  .fun-stat-text {
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-primary);
+  }
+
+  .fun-stat-text strong {
+    font-family: var(--font-mono);
+    font-weight: 700;
+  }
+
+  /* --- Footer --- */
+  footer.card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .btn {
+    display: inline-block;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 0.15s ease, transform 0.1s ease;
+  }
+
+  .btn:active { transform: scale(0.98); }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  .btn-primary:hover { background: var(--accent-hover); }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+
+  .btn-secondary:hover {
+    background: var(--accent-soft);
+  }
+
+  .footnote {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0;
+    max-width: 640px;
+  }
+
+  .data-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px 14px;
+  }
+
+  .link-btn {
+    border: none;
+    background: none;
+    padding: 2px 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .link-btn:hover {
+    color: var(--accent);
+  }
+
+  .link-btn-danger:hover {
+    color: var(--error);
+  }
+
+  /* --- Tabs & Bewertungs-Modul --- */
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin: 4px 2px 4px;
+  }
+
+  .tab-btn {
+    border: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    padding: 10px 4px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  .tab-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .tier-list {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .tier-band {
+    display: flex;
+    align-items: stretch;
+  }
+
+  .tier-band + .tier-band {
+    border-top: 1px solid var(--border);
+  }
+
+  .tier-band-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 68px;
+    flex-shrink: 0;
+    padding: 10px 6px;
+  }
+
+  .tier-letter {
+    font-family: var(--font-mono);
+    font-size: 24px;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .tier-name {
+    font-family: var(--font-mono);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    text-transform: uppercase;
+    text-align: center;
+    line-height: 1.2;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+    opacity: 0.75;
+  }
+
+  .tier-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 8px;
+    flex: 1;
+    align-items: flex-start;
+    min-height: 96px;
+    padding: 10px;
+    background: var(--surface);
+    box-sizing: border-box;
+  }
+
+  .tier-empty {
+    align-self: center;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 6px 2px;
+  }
+
+  .tier-chip {
+    width: 78px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 4px 7px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg);
+    color: var(--text-primary);
+    text-align: center;
+  }
+
+  .tier-chip-flag {
+    font-size: 26px;
+    line-height: 1;
+  }
+
+  .tier-chip-caption {
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .tier-chip-score {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    opacity: 0.65;
+  }
+
+  .tier-chip-preliminary {
+    border-style: dashed;
+    opacity: 0.7;
+  }
+
+  .tier-band.tier-s .tier-band-label { background: var(--tier-s); color: #fff; }
+  .tier-band.tier-a .tier-band-label { background: var(--tier-a); color: var(--text-primary); }
+  .tier-band.tier-b .tier-band-label { background: var(--tier-b); color: var(--text-primary); }
+  .tier-band.tier-c .tier-band-label { background: var(--tier-c); color: var(--text-primary); }
+  .tier-band.tier-d .tier-band-label { background: var(--tier-d); color: var(--text-primary); }
+  .tier-band.tier-s .tier-name { color: inherit; }
+
+  .unrated-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .unrated-pill {
+    border: 1px dashed var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .unrated-cta {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 11.5px;
+  }
+
+  .ratings-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+  }
+
+  .rating-row {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+
+  .rating-row.highlight {
+    border-color: var(--accent);
+  }
+
+  .rating-row-header {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: none;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: left;
+    min-height: 44px;
+  }
+
+  .rating-row-header .country-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .score-badge {
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 13px;
+    border-radius: 6px;
+    padding: 4px 10px;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+  }
+
+  .score-badge.tier-s { background: var(--surface); border-color: var(--tier-s); color: var(--tier-s); }
+  .score-badge.tier-a { background: var(--surface); border-color: var(--tier-a); color: var(--tier-a); }
+  .score-badge.tier-b { background: var(--surface); border-color: var(--tier-b); color: var(--tier-b); }
+  .score-badge.tier-c { background: var(--surface); border-color: var(--tier-c); color: var(--tier-c); }
+  .score-badge.tier-d { background: var(--surface); border-color: var(--tier-d); color: var(--tier-d); }
+
+  .rating-row-body {
+    display: none;
+    padding: 4px 14px 14px;
+  }
+
+  .rating-row.expanded .rating-row-body {
+    display: block;
+  }
+
+  .rating-criterion-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 13px;
+  }
+
+  .star-rating {
+    display: flex;
+    gap: 2px;
+  }
+
+  .star-btn {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .star-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .star-outline,
+  .star-fill {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+
+  .star-fill {
+    color: var(--wishlist);
+    clip-path: inset(0 calc(100% - var(--fill, 0%)) 0 0);
+  }
+
+  .star-btn.active .star-outline {
+    color: var(--wishlist);
+  }
+
+  .rating-hint {
+    margin: 0 0 6px;
+  }
+
+  /* --- Export-Dialog --- */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 17, 23, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    z-index: 100;
+  }
+
+  .modal-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    width: 100%;
+    max-width: 900px;
+    max-height: 92vh;
+    overflow-y: auto;
+    padding: 24px;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .modal-header h2 {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .modal-close {
+    border: none;
+    background: none;
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--text-secondary);
+    padding: 2px 6px;
+  }
+
+  .modal-close:hover {
+    color: var(--text-primary);
+  }
+
+  .modal-body {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 720px) {
+    .modal-body {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .export-preview-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 16px;
+    min-height: 280px;
+  }
+
+  #exportPreviewCanvas {
+    max-width: 100%;
+    max-height: 62vh;
+    border-radius: 10px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  }
+
+  .export-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .export-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .export-field input {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 400;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    background: var(--surface);
+  }
+
+  .export-field input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .export-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .pill {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--text-secondary);
+    font-family: inherit;
+  }
+
+  .pill:hover {
+    border-color: var(--accent);
+  }
+
+  .pill.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .theme-swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .swatch {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .swatch.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+  }
+
+  .export-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .export-actions .btn {
+    flex: 1;
+  }
+
+  /* --- Erfolge: schlichte Liste statt Badge-Reihe --- */
+  .achievements-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .achievement-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--accent);
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .achievement-row:last-child {
+    border-bottom: none;
+  }
+
+  .achievement-row svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .achievement-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 28px;
+    transform: translate(-50%, 16px);
+    background: var(--text-primary);
+    color: #fff;
+    padding: 11px 20px;
+    border-radius: 6px;
+    font-size: 13.5px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    z-index: 200;
+    pointer-events: none;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  }
+
+  .achievement-toast em {
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 700;
+  }
+
+  .achievement-toast.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  /* --- Reisepass-Stempel: bewusst der visuelle Blickfang der Seite, hebt sich
+     daher über den gestrichelten "Dokumentenrand" statt über einen Schatten
+     vom Rest ab (gleiches Motiv wie Stempel/vorläufige Tier-Chips). --- */
+  .stamps-card {
+    border: 1.5px dashed var(--border);
+    border-radius: 12px;
+    box-shadow: none;
+  }
+
+  .stamps-card h2 {
+    margin-bottom: 2px;
+  }
+
+  .stamps-subtitle {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0 0 20px;
+  }
+
+  .stamps-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+  }
+
+  .stamps-empty {
+    color: var(--text-secondary);
+    font-size: 14px;
+    margin: 0;
+  }
+
+  .stamp {
+    --rot: 0deg;
+    --ink: var(--accent);
+    --ink-soft: var(--accent-soft);
+    width: 96px;
+    height: 96px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    color: var(--ink);
+    background: var(--ink-soft);
+    font-family: var(--font-body);
+    line-height: 1.2;
+    transform: rotate(var(--rot));
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+  }
+
+  .stamp:hover {
+    transform: rotate(0deg) scale(1.1);
+    box-shadow: 0 8px 18px rgba(42, 36, 32, 0.18);
+  }
+
+  .stamp.editing {
+    cursor: default;
+  }
+
+  .stamp-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+  }
+
+  /* --- Formen --- */
+  .stamp-shape-oval {
+    border-radius: 50%;
+  }
+
+  .stamp-shape-rect {
+    border-radius: 12px;
+  }
+
+  .stamp-shape-diamond {
+    border-radius: 10px;
+    transform: rotate(calc(45deg + var(--rot)));
+  }
+
+  .stamp-shape-diamond:hover {
+    transform: rotate(45deg) scale(1.1);
+  }
+
+  .stamp-shape-diamond .stamp-inner {
+    transform: rotate(calc(-45deg - var(--rot)));
+  }
+
+  .stamp-shape-diamond:hover .stamp-inner {
+    transform: rotate(-45deg);
+  }
+
+  /* --- Rahmen-Varianten --- */
+  .stamp-border-double {
+    border: 3px double var(--ink);
+  }
+
+  .stamp-border-dashed {
+    border: 2px dashed var(--ink);
+  }
+
+  .stamp-border-dotted {
+    border: 2.5px dotted var(--ink);
+  }
+
+  .stamp-plane-icon {
+    width: 14px;
+    height: 14px;
+    margin-bottom: 2px;
+  }
+
+  .stamp-name {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+
+  .stamp-date {
+    display: block;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 600;
+    font-size: 11.5px;
+    margin-top: 4px;
+    opacity: 0.85;
+  }
+
+  .stamp-date-hint {
+    font-family: var(--font-body);
+    font-style: normal;
+    font-weight: 500;
+    font-size: 9.5px;
+    letter-spacing: 0;
+    text-transform: none;
+    opacity: 0.5;
+  }
+
+  .stamp-date-fields {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .stamp-date-month,
+  .stamp-date-year {
+    border: 1.5px solid var(--ink);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 2px 1px;
+    outline: none;
+  }
+
+  .stamp-date-month {
+    width: 38px;
+  }
+
+  .stamp-date-year {
+    width: 42px;
+  }
+
+  .stamp-date-clear {
+    border: none;
+    background: none;
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 1px;
+    opacity: 0.65;
+  }
+
+  .stamp-date-clear:hover {
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header>
+    <div class="header-title">
+      <h1>Reise-Tracker</h1>
+      <p class="subtitle">Welche Länder hast du schon besucht?</p>
+    </div>
+    <div class="global-stat">
+      <span class="stat-label">Bereist</span>
+      <div class="percent" id="globalPercent">0%</div>
+      <div class="percent-accent"></div>
+      <div class="detail" id="globalDetail">0 von 195 Ländern besucht</div>
+      <div class="wishlist-note" id="wishlistNote">0 Länder auf der Wunschliste</div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab-btn active" data-tab="entdecken" role="tab" aria-selected="true" id="tabBtnEntdecken">Entdecken</button>
+    <button type="button" class="tab-btn" data-tab="bewertungen" role="tab" aria-selected="false" id="tabBtnBewertungen">Bewertungen</button>
+  </nav>
+
+  <div id="tabPanelEntdecken" class="tab-panel">
+
+  <section class="map-section">
+    <div id="mapLoading" class="map-state-card">
+      <div class="spinner"></div>
+      <p>Weltkarte wird geladen...</p>
+    </div>
+
+    <div id="mapError" class="map-state-card hidden">
+      <p id="mapErrorText">Die Kartendaten konnten nicht geladen werden. Bitte prüfe deine Internetverbindung.</p>
+      <button id="mapRetryBtn" class="btn btn-primary">Erneut versuchen</button>
+    </div>
+
+    <svg id="worldMap" class="hidden" viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="tooltip" class="tooltip hidden"></div>
+
+    <div id="mapLegend" class="map-legend hidden">
+      <span><span class="legend-dot visited"></span>Besucht</span>
+      <span><span class="legend-dot wishlist"></span>Wunschliste</span>
+      <span><span class="legend-dot unvisited"></span>Noch nicht besucht</span>
+    </div>
+
+    <div class="zoom-controls">
+      <button id="zoomInBtn" class="zoom-btn" type="button" title="Vergrößern" aria-label="Karte vergrößern">+</button>
+      <button id="zoomOutBtn" class="zoom-btn" type="button" title="Verkleinern" aria-label="Karte verkleinern">−</button>
+      <button id="zoomResetBtn" class="zoom-btn" type="button" title="Zoom zurücksetzen" aria-label="Zoom zurücksetzen">⟲</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <input id="searchInput" type="text" placeholder="Land suchen...">
+    <div id="countryList" class="country-list"></div>
+  </section>
+
+  <div class="secondary-grid">
+    <section class="card stats-card">
+      <h2>Bereiste Kontinente</h2>
+      <div id="continentStats"></div>
+    </section>
+
+    <section class="card stats-card">
+      <h2>Erfolge</h2>
+      <div id="achievementsList" class="achievements-list"></div>
+    </section>
+  </div>
+
+  <section class="card stats-card">
+    <h2>Spannende Zahlen</h2>
+    <div id="funStatsList" class="fun-stats-list"></div>
+  </section>
+
+  <section class="card stamps-card">
+    <h2>Dein Reisepass</h2>
+    <p class="stamps-subtitle">Ein Stempel für jedes besuchte Land – klicke auf einen Stempel, um deinen Reisemonat einzutragen</p>
+    <div id="stampsGrid" class="stamps-grid"></div>
+  </section>
+
+  </div>
+
+  <div id="tabPanelBewertungen" class="tab-panel hidden" role="tabpanel">
+
+    <section class="card">
+      <div class="ratings-list-header">
+        <h2>Deine Länder-Rangliste</h2>
+        <button id="exportTierListBtn" type="button" class="btn btn-secondary">Als Bild exportieren</button>
+      </div>
+      <p class="footnote">Bewerte besuchte Länder nach 9 Kriterien – der Score ordnet sie automatisch in eine Tier-List ein.</p>
+      <div id="tierList" class="tier-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Noch nicht bewertet</h2>
+      <div id="unratedList" class="unrated-list"></div>
+    </section>
+
+    <section class="card">
+      <div class="ratings-list-header">
+        <h2>Alle bewerteten Länder</h2>
+        <input id="ratingsSearchInput" type="text" placeholder="Besuchtes Land suchen...">
+      </div>
+      <div id="ratingsList" class="ratings-list"></div>
+    </section>
+
+  </div>
+
+  <footer class="card">
+    <button id="exportBtn" class="btn btn-primary">Bild erstellen &amp; teilen</button>
+
+    <div class="data-actions">
+      <button id="backupExportBtn" class="link-btn" type="button">Backup speichern</button>
+      <button id="backupImportBtn" class="link-btn" type="button">Backup laden</button>
+      <input id="backupFileInput" type="file" accept="application/json" class="hidden">
+      <button id="resetBtn" class="link-btn link-btn-danger" type="button">Alle Daten zurücksetzen</button>
+    </div>
+
+    <p class="footnote">Gebiete ohne eigene Staatlichkeit (z. B. Grönland, Französisch-Guayana, Antarktis) werden zur Vereinfachung grau dargestellt und nicht separat gezählt. Die Prozentzahl bezieht sich auf 195 Staaten (193 UN-Mitglieder, Vatikanstadt und Palästina).</p>
+    <p class="footnote">Deine Daten bleiben ausschließlich lokal in diesem Browser gespeichert.</p>
+  </footer>
+
+</div>
+
+<div id="exportModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <div class="modal-header">
+      <h2>Bild erstellen</h2>
+      <button id="exportModalClose" class="modal-close" type="button" aria-label="Schließen">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="export-preview-wrap">
+        <canvas id="exportPreviewCanvas"></canvas>
+      </div>
+
+      <div class="export-controls">
+        <div class="export-field">
+          <span>Inhalt</span>
+          <div class="export-pills" id="contentPills">
+            <button type="button" class="pill active" data-content="map">Karte</button>
+            <button type="button" class="pill" data-content="tierlist">Tier-List</button>
+          </div>
+        </div>
+
+        <label class="export-field">
+          <span>Titel</span>
+          <input id="exportTitleInput" type="text" placeholder='z. B. „Toms Weltreise“' maxlength="40">
+        </label>
+
+        <div class="export-field">
+          <span>Format</span>
+          <div class="export-pills" id="formatPills">
+            <button type="button" class="pill active" data-format="square">Quadrat</button>
+            <button type="button" class="pill" data-format="portrait">Hochformat</button>
+            <button type="button" class="pill" data-format="story">Story</button>
+            <button type="button" class="pill" data-format="landscape">Querformat</button>
+          </div>
+        </div>
+
+        <div class="export-field">
+          <span>Farbthema</span>
+          <div class="theme-swatches" id="themeSwatches">
+            <button type="button" class="swatch active" data-theme="classic" style="background: linear-gradient(135deg,#f5f6fc,#e3e7fb);" title="Klassisch" aria-label="Thema Klassisch"></button>
+            <button type="button" class="swatch" data-theme="dark" style="background: linear-gradient(135deg,#111827,#1f2a3d);" title="Dunkel" aria-label="Thema Dunkel"></button>
+            <button type="button" class="swatch" data-theme="sunset" style="background: linear-gradient(135deg,#ffb199,#b98bd4);" title="Sunset" aria-label="Thema Sunset"></button>
+            <button type="button" class="swatch" data-theme="ocean" style="background: linear-gradient(135deg,#5aa9c9,#1f7a9c);" title="Ozean" aria-label="Thema Ozean"></button>
+            <button type="button" class="swatch" data-theme="vintage" style="background: linear-gradient(135deg,#faf8f4,#f0e6d8);" title="Vintage" aria-label="Thema Vintage"></button>
+            <button type="button" class="swatch" data-theme="mono" style="background: linear-gradient(135deg,#f7f3ea,#ece4d3);" title="Mono" aria-label="Thema Mono"></button>
+          </div>
+        </div>
+
+        <div class="export-actions">
+          <button id="exportDownloadBtn" class="btn btn-primary" type="button">Bild herunterladen</button>
+          <button id="exportShareBtn" class="btn btn-secondary hidden" type="button">Teilen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ==================================================================
+   Konfiguration
+   ================================================================== */
+const CONFIG = {
+  // 50m statt 10m: bei sehr fragmentierten Inselstaaten (z. B. Malediven) löst die
+  // feingliedrige 10m-Auflösung einen bekannten Darstellungsfehler in d3-geo
+  // (Antimeridian-Clipping) aus; 50m rendert zuverlässig bei weiterhin fast
+  // vollständiger Länderabdeckung.
+  mapDataUrl: "https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-50m.json",
+  storageKey: "reiseTrackerState",
+  mapWidth: 960,
+  mapHeight: 500,
+  antarcticaId: "10"
+};
+
+const CONTINENTS = ["Europa", "Asien", "Afrika", "Nordamerika", "Südamerika", "Ozeanien"];
+
+const RATING_CRITERIA = [
+  { id: "natur", label: "Natur & Landschaft" },
+  { id: "klima", label: "Klima & Wetter" },
+  { id: "sehenswuerdigkeiten", label: "Sehenswürdigkeiten & Architektur" },
+  { id: "kultur", label: "Geschichte & Kultur" },
+  { id: "nachtleben", label: "Nachtleben & Unterhaltung" },
+  { id: "essen", label: "Essen & Kulinarik" },
+  { id: "sicherheit", label: "Sicherheit & Infrastruktur" },
+  { id: "preis", label: "Preis-Leistung" },
+  { id: "gastfreundlichkeit", label: "Gastfreundlichkeit" }
+];
+
+const RATING_PRELIMINARY_THRESHOLD = Math.ceil(RATING_CRITERIA.length / 2);
+
+const TIER_DEFS = [
+  { id: "S", label: "S", name: "Höhepunkte", min: 4.5 },
+  { id: "A", label: "A", name: "Sehr gut", min: 4.0 },
+  { id: "B", label: "B", name: "Gut", min: 3.0 },
+  { id: "C", label: "C", name: "Durchwachsen", min: 2.0 },
+  { id: "D", label: "D", name: "Enttäuschend", min: 0 }
+];
+
+/* ==================================================================
+   Länder-Stammdaten: ISO-3166-1-numerisch -> Name (deutsch) + Kontinent
+   195 Staaten (193 UN-Mitglieder + Vatikanstadt + Palästina)
+   ================================================================== */
+const COUNTRY_DATA = {
+  "4": { name: "Afghanistan", continent: "Asien" },
+  "8": { name: "Albanien", continent: "Europa" },
+  "12": { name: "Algerien", continent: "Afrika" },
+  "20": { name: "Andorra", continent: "Europa" },
+  "24": { name: "Angola", continent: "Afrika" },
+  "28": { name: "Antigua und Barbuda", continent: "Nordamerika" },
+  "32": { name: "Argentinien", continent: "Südamerika" },
+  "51": { name: "Armenien", continent: "Asien" },
+  "36": { name: "Australien", continent: "Ozeanien" },
+  "40": { name: "Österreich", continent: "Europa" },
+  "31": { name: "Aserbaidschan", continent: "Asien" },
+  "44": { name: "Bahamas", continent: "Nordamerika" },
+  "48": { name: "Bahrain", continent: "Asien" },
+  "50": { name: "Bangladesch", continent: "Asien" },
+  "52": { name: "Barbados", continent: "Nordamerika" },
+  "112": { name: "Belarus", continent: "Europa" },
+  "56": { name: "Belgien", continent: "Europa" },
+  "84": { name: "Belize", continent: "Nordamerika" },
+  "204": { name: "Benin", continent: "Afrika" },
+  "64": { name: "Bhutan", continent: "Asien" },
+  "68": { name: "Bolivien", continent: "Südamerika" },
+  "70": { name: "Bosnien und Herzegowina", continent: "Europa" },
+  "72": { name: "Botswana", continent: "Afrika" },
+  "76": { name: "Brasilien", continent: "Südamerika" },
+  "96": { name: "Brunei", continent: "Asien" },
+  "100": { name: "Bulgarien", continent: "Europa" },
+  "854": { name: "Burkina Faso", continent: "Afrika" },
+  "108": { name: "Burundi", continent: "Afrika" },
+  "132": { name: "Kap Verde", continent: "Afrika" },
+  "116": { name: "Kambodscha", continent: "Asien" },
+  "120": { name: "Kamerun", continent: "Afrika" },
+  "124": { name: "Kanada", continent: "Nordamerika" },
+  "140": { name: "Zentralafrikanische Republik", continent: "Afrika" },
+  "148": { name: "Tschad", continent: "Afrika" },
+  "152": { name: "Chile", continent: "Südamerika" },
+  "156": { name: "China", continent: "Asien" },
+  "170": { name: "Kolumbien", continent: "Südamerika" },
+  "174": { name: "Komoren", continent: "Afrika" },
+  "178": { name: "Kongo (Republik)", continent: "Afrika" },
+  "180": { name: "Demokratische Republik Kongo", continent: "Afrika" },
+  "188": { name: "Costa Rica", continent: "Nordamerika" },
+  "384": { name: "Elfenbeinküste", continent: "Afrika" },
+  "191": { name: "Kroatien", continent: "Europa" },
+  "192": { name: "Kuba", continent: "Nordamerika" },
+  "196": { name: "Zypern", continent: "Asien" },
+  "203": { name: "Tschechien", continent: "Europa" },
+  "208": { name: "Dänemark", continent: "Europa" },
+  "262": { name: "Dschibuti", continent: "Afrika" },
+  "212": { name: "Dominica", continent: "Nordamerika" },
+  "214": { name: "Dominikanische Republik", continent: "Nordamerika" },
+  "218": { name: "Ecuador", continent: "Südamerika" },
+  "818": { name: "Ägypten", continent: "Afrika" },
+  "222": { name: "El Salvador", continent: "Nordamerika" },
+  "226": { name: "Äquatorialguinea", continent: "Afrika" },
+  "232": { name: "Eritrea", continent: "Afrika" },
+  "233": { name: "Estland", continent: "Europa" },
+  "748": { name: "Eswatini", continent: "Afrika" },
+  "231": { name: "Äthiopien", continent: "Afrika" },
+  "242": { name: "Fidschi", continent: "Ozeanien" },
+  "246": { name: "Finnland", continent: "Europa" },
+  "250": { name: "Frankreich", continent: "Europa" },
+  "266": { name: "Gabun", continent: "Afrika" },
+  "270": { name: "Gambia", continent: "Afrika" },
+  "268": { name: "Georgien", continent: "Asien" },
+  "276": { name: "Deutschland", continent: "Europa" },
+  "288": { name: "Ghana", continent: "Afrika" },
+  "300": { name: "Griechenland", continent: "Europa" },
+  "308": { name: "Grenada", continent: "Nordamerika" },
+  "320": { name: "Guatemala", continent: "Nordamerika" },
+  "324": { name: "Guinea", continent: "Afrika" },
+  "624": { name: "Guinea-Bissau", continent: "Afrika" },
+  "328": { name: "Guyana", continent: "Südamerika" },
+  "332": { name: "Haiti", continent: "Nordamerika" },
+  "340": { name: "Honduras", continent: "Nordamerika" },
+  "348": { name: "Ungarn", continent: "Europa" },
+  "352": { name: "Island", continent: "Europa" },
+  "356": { name: "Indien", continent: "Asien" },
+  "360": { name: "Indonesien", continent: "Asien" },
+  "364": { name: "Iran", continent: "Asien" },
+  "368": { name: "Irak", continent: "Asien" },
+  "372": { name: "Irland", continent: "Europa" },
+  "376": { name: "Israel", continent: "Asien" },
+  "380": { name: "Italien", continent: "Europa" },
+  "388": { name: "Jamaika", continent: "Nordamerika" },
+  "392": { name: "Japan", continent: "Asien" },
+  "400": { name: "Jordanien", continent: "Asien" },
+  "398": { name: "Kasachstan", continent: "Asien" },
+  "404": { name: "Kenia", continent: "Afrika" },
+  "296": { name: "Kiribati", continent: "Ozeanien" },
+  "414": { name: "Kuwait", continent: "Asien" },
+  "417": { name: "Kirgisistan", continent: "Asien" },
+  "418": { name: "Laos", continent: "Asien" },
+  "428": { name: "Lettland", continent: "Europa" },
+  "422": { name: "Libanon", continent: "Asien" },
+  "426": { name: "Lesotho", continent: "Afrika" },
+  "430": { name: "Liberia", continent: "Afrika" },
+  "434": { name: "Libyen", continent: "Afrika" },
+  "438": { name: "Liechtenstein", continent: "Europa" },
+  "440": { name: "Litauen", continent: "Europa" },
+  "442": { name: "Luxemburg", continent: "Europa" },
+  "450": { name: "Madagaskar", continent: "Afrika" },
+  "454": { name: "Malawi", continent: "Afrika" },
+  "458": { name: "Malaysia", continent: "Asien" },
+  "462": { name: "Malediven", continent: "Asien" },
+  "466": { name: "Mali", continent: "Afrika" },
+  "470": { name: "Malta", continent: "Europa" },
+  "584": { name: "Marshallinseln", continent: "Ozeanien" },
+  "478": { name: "Mauretanien", continent: "Afrika" },
+  "480": { name: "Mauritius", continent: "Afrika" },
+  "484": { name: "Mexiko", continent: "Nordamerika" },
+  "583": { name: "Mikronesien", continent: "Ozeanien" },
+  "498": { name: "Moldau", continent: "Europa" },
+  "492": { name: "Monaco", continent: "Europa" },
+  "496": { name: "Mongolei", continent: "Asien" },
+  "499": { name: "Montenegro", continent: "Europa" },
+  "504": { name: "Marokko", continent: "Afrika" },
+  "508": { name: "Mosambik", continent: "Afrika" },
+  "104": { name: "Myanmar", continent: "Asien" },
+  "516": { name: "Namibia", continent: "Afrika" },
+  "520": { name: "Nauru", continent: "Ozeanien" },
+  "524": { name: "Nepal", continent: "Asien" },
+  "528": { name: "Niederlande", continent: "Europa" },
+  "554": { name: "Neuseeland", continent: "Ozeanien" },
+  "558": { name: "Nicaragua", continent: "Nordamerika" },
+  "562": { name: "Niger", continent: "Afrika" },
+  "566": { name: "Nigeria", continent: "Afrika" },
+  "408": { name: "Nordkorea", continent: "Asien" },
+  "807": { name: "Nordmazedonien", continent: "Europa" },
+  "578": { name: "Norwegen", continent: "Europa" },
+  "512": { name: "Oman", continent: "Asien" },
+  "586": { name: "Pakistan", continent: "Asien" },
+  "585": { name: "Palau", continent: "Ozeanien" },
+  "275": { name: "Palästina", continent: "Asien" },
+  "591": { name: "Panama", continent: "Nordamerika" },
+  "598": { name: "Papua-Neuguinea", continent: "Ozeanien" },
+  "600": { name: "Paraguay", continent: "Südamerika" },
+  "604": { name: "Peru", continent: "Südamerika" },
+  "608": { name: "Philippinen", continent: "Asien" },
+  "616": { name: "Polen", continent: "Europa" },
+  "620": { name: "Portugal", continent: "Europa" },
+  "634": { name: "Katar", continent: "Asien" },
+  "642": { name: "Rumänien", continent: "Europa" },
+  "643": { name: "Russland", continent: "Europa" },
+  "646": { name: "Ruanda", continent: "Afrika" },
+  "659": { name: "St. Kitts und Nevis", continent: "Nordamerika" },
+  "662": { name: "St. Lucia", continent: "Nordamerika" },
+  "670": { name: "St. Vincent und die Grenadinen", continent: "Nordamerika" },
+  "882": { name: "Samoa", continent: "Ozeanien" },
+  "674": { name: "San Marino", continent: "Europa" },
+  "678": { name: "São Tomé und Príncipe", continent: "Afrika" },
+  "682": { name: "Saudi-Arabien", continent: "Asien" },
+  "686": { name: "Senegal", continent: "Afrika" },
+  "688": { name: "Serbien", continent: "Europa" },
+  "690": { name: "Seychellen", continent: "Afrika" },
+  "694": { name: "Sierra Leone", continent: "Afrika" },
+  "702": { name: "Singapur", continent: "Asien" },
+  "703": { name: "Slowakei", continent: "Europa" },
+  "705": { name: "Slowenien", continent: "Europa" },
+  "90": { name: "Salomonen", continent: "Ozeanien" },
+  "706": { name: "Somalia", continent: "Afrika" },
+  "710": { name: "Südafrika", continent: "Afrika" },
+  "410": { name: "Südkorea", continent: "Asien" },
+  "728": { name: "Südsudan", continent: "Afrika" },
+  "724": { name: "Spanien", continent: "Europa" },
+  "144": { name: "Sri Lanka", continent: "Asien" },
+  "729": { name: "Sudan", continent: "Afrika" },
+  "740": { name: "Suriname", continent: "Südamerika" },
+  "752": { name: "Schweden", continent: "Europa" },
+  "756": { name: "Schweiz", continent: "Europa" },
+  "760": { name: "Syrien", continent: "Asien" },
+  "762": { name: "Tadschikistan", continent: "Asien" },
+  "834": { name: "Tansania", continent: "Afrika" },
+  "764": { name: "Thailand", continent: "Asien" },
+  "626": { name: "Timor-Leste", continent: "Asien" },
+  "768": { name: "Togo", continent: "Afrika" },
+  "776": { name: "Tonga", continent: "Ozeanien" },
+  "780": { name: "Trinidad und Tobago", continent: "Nordamerika" },
+  "788": { name: "Tunesien", continent: "Afrika" },
+  "792": { name: "Türkei", continent: "Asien" },
+  "795": { name: "Turkmenistan", continent: "Asien" },
+  "798": { name: "Tuvalu", continent: "Ozeanien" },
+  "800": { name: "Uganda", continent: "Afrika" },
+  "804": { name: "Ukraine", continent: "Europa" },
+  "784": { name: "Vereinigte Arabische Emirate", continent: "Asien" },
+  "826": { name: "Vereinigtes Königreich", continent: "Europa" },
+  "840": { name: "Vereinigte Staaten", continent: "Nordamerika" },
+  "858": { name: "Uruguay", continent: "Südamerika" },
+  "860": { name: "Usbekistan", continent: "Asien" },
+  "548": { name: "Vanuatu", continent: "Ozeanien" },
+  "336": { name: "Vatikanstadt", continent: "Europa" },
+  "862": { name: "Venezuela", continent: "Südamerika" },
+  "704": { name: "Vietnam", continent: "Asien" },
+  "887": { name: "Jemen", continent: "Asien" },
+  "894": { name: "Sambia", continent: "Afrika" },
+  "716": { name: "Simbabwe", continent: "Afrika" }
+};
+
+const TOTAL_COUNTRIES = Object.keys(COUNTRY_DATA).length;
+
+/* ISO-3166-1-numerisch -> Alpha-2, zur Berechnung der Flaggen-Emoji (zwei
+   "Regional Indicator Symbols" pro Flagge, keine Bilddateien nötig). */
+const COUNTRY_ALPHA2 = {
+  "4": "AF", "8": "AL", "12": "DZ", "20": "AD", "24": "AO", "28": "AG", "32": "AR", "51": "AM",
+  "36": "AU", "40": "AT", "31": "AZ", "44": "BS", "48": "BH", "50": "BD", "52": "BB", "112": "BY",
+  "56": "BE", "84": "BZ", "204": "BJ", "64": "BT", "68": "BO", "70": "BA", "72": "BW", "76": "BR",
+  "96": "BN", "100": "BG", "854": "BF", "108": "BI", "132": "CV", "116": "KH", "120": "CM", "124": "CA",
+  "140": "CF", "148": "TD", "152": "CL", "156": "CN", "170": "CO", "174": "KM", "178": "CG", "180": "CD",
+  "188": "CR", "384": "CI", "191": "HR", "192": "CU", "196": "CY", "203": "CZ", "208": "DK", "262": "DJ",
+  "212": "DM", "214": "DO", "218": "EC", "818": "EG", "222": "SV", "226": "GQ", "232": "ER", "233": "EE",
+  "748": "SZ", "231": "ET", "242": "FJ", "246": "FI", "250": "FR", "266": "GA", "270": "GM", "268": "GE",
+  "276": "DE", "288": "GH", "300": "GR", "308": "GD", "320": "GT", "324": "GN", "624": "GW", "328": "GY",
+  "332": "HT", "340": "HN", "348": "HU", "352": "IS", "356": "IN", "360": "ID", "364": "IR", "368": "IQ",
+  "372": "IE", "376": "IL", "380": "IT", "388": "JM", "392": "JP", "400": "JO", "398": "KZ", "404": "KE",
+  "296": "KI", "414": "KW", "417": "KG", "418": "LA", "428": "LV", "422": "LB", "426": "LS", "430": "LR",
+  "434": "LY", "438": "LI", "440": "LT", "442": "LU", "450": "MG", "454": "MW", "458": "MY", "462": "MV",
+  "466": "ML", "470": "MT", "584": "MH", "478": "MR", "480": "MU", "484": "MX", "583": "FM", "498": "MD",
+  "492": "MC", "496": "MN", "499": "ME", "504": "MA", "508": "MZ", "104": "MM", "516": "NA", "520": "NR",
+  "524": "NP", "528": "NL", "554": "NZ", "558": "NI", "562": "NE", "566": "NG", "408": "KP", "807": "MK",
+  "578": "NO", "512": "OM", "586": "PK", "585": "PW", "275": "PS", "591": "PA", "598": "PG", "600": "PY",
+  "604": "PE", "608": "PH", "616": "PL", "620": "PT", "634": "QA", "642": "RO", "643": "RU", "646": "RW",
+  "659": "KN", "662": "LC", "670": "VC", "882": "WS", "674": "SM", "678": "ST", "682": "SA", "686": "SN",
+  "688": "RS", "690": "SC", "694": "SL", "702": "SG", "703": "SK", "705": "SI", "90": "SB", "706": "SO",
+  "710": "ZA", "410": "KR", "728": "SS", "724": "ES", "144": "LK", "729": "SD", "740": "SR", "752": "SE",
+  "756": "CH", "760": "SY", "762": "TJ", "834": "TZ", "764": "TH", "626": "TL", "768": "TG", "776": "TO",
+  "780": "TT", "788": "TN", "792": "TR", "795": "TM", "798": "TV", "800": "UG", "804": "UA", "784": "AE",
+  "826": "GB", "840": "US", "858": "UY", "860": "UZ", "548": "VU", "336": "VA", "862": "VE", "704": "VN",
+  "887": "YE", "894": "ZM", "716": "ZW"
+};
+
+function countryFlag(code) {
+  const alpha2 = COUNTRY_ALPHA2[code];
+  if (!alpha2) return "";
+  return String.fromCodePoint(...[...alpha2].map((c) => 127397 + c.charCodeAt(0)));
+}
+
+/* ==================================================================
+   State-Modul (Persistenz via localStorage)
+   ================================================================== */
+// visitDates: Code -> "YYYY-MM" (nur Monat/Jahr, kein genaues Datum)
+const state = { visited: new Set(), wishlist: new Set(), visitDates: new Map(), ratings: new Map() };
+
+function loadState() {
+  try {
+    const raw = localStorage.getItem(CONFIG.storageKey);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    (parsed.visited || []).forEach((code) => state.visited.add(String(code)));
+    (parsed.wishlist || []).forEach((code) => state.wishlist.add(String(code)));
+    const dates = parsed.visitDates || {};
+    Object.keys(dates).forEach((code) => {
+      if (dates[code]) state.visitDates.set(String(code), dates[code]);
+    });
+    const ratings = parsed.ratings || {};
+    Object.keys(ratings).forEach((code) => {
+      const obj = ratings[code];
+      if (obj && typeof obj === "object") state.ratings.set(String(code), obj);
+    });
+  } catch (err) {
+    console.warn("Gespeicherter Zustand konnte nicht gelesen werden, starte neu.", err);
+  }
+}
+
+function saveState() {
+  const payload = {
+    version: 1,
+    visited: Array.from(state.visited),
+    wishlist: Array.from(state.wishlist),
+    visitDates: Object.fromEntries(state.visitDates),
+    ratings: Object.fromEntries(state.ratings)
+  };
+  localStorage.setItem(CONFIG.storageKey, JSON.stringify(payload));
+}
+
+function getStatus(code) {
+  if (state.visited.has(code)) return "visited";
+  if (state.wishlist.has(code)) return "wishlist";
+  return "unvisited";
+}
+
+/**
+ * Setzt den Status eines Landes und sorgt für Exklusivität zwischen
+ * "besucht" und "Wunschliste". Aktualisiert anschließend alle UI-Teile,
+ * die vom Status dieses Landes abhängen.
+ */
+function setStatus(code, status) {
+  state.visited.delete(code);
+  state.wishlist.delete(code);
+  if (status === "visited") state.visited.add(code);
+  else if (status === "wishlist") state.wishlist.add(code);
+  if (status !== "visited") { state.visitDates.delete(code); state.ratings.delete(code); }
+
+  saveState();
+  updateCountryFill(code);
+  updateListRow(code);
+  renderStats();
+  renderFunStats();
+  renderAchievements();
+  renderStamps();
+  renderRatingsTab();
+}
+
+function handleMapClick(code) {
+  const current = getStatus(code);
+  const next = current === "unvisited" ? "visited" : current === "visited" ? "wishlist" : "unvisited";
+  setStatus(code, next);
+}
+
+function handleListAction(code, action) {
+  const current = getStatus(code);
+  setStatus(code, current === action ? "unvisited" : action);
+}
+
+/* ==================================================================
+   Karten-Modul
+   ================================================================== */
+const svgNS = "http://www.w3.org/2000/svg";
+const worldMapEl = document.getElementById("worldMap");
+const mapLoadingEl = document.getElementById("mapLoading");
+const mapErrorEl = document.getElementById("mapError");
+const mapLegendEl = document.getElementById("mapLegend");
+const countryPaths = new Map();
+let zoomBehavior = null;
+let mapGroupEl = null;
+
+// Feste Farbwerte (nicht var(--...)) statt CSS-Variablen: Beim Bild-Export wird
+// die SVG eigenständig (ohne Zugriff auf das Stylesheet der Seite) serialisiert
+// und gerendert, dort lösen sich CSS-Variablen nicht auf und fallen auf Schwarz
+// zurück. Diese Werte müssen zu den --visited/--wishlist/--map-*-Variablen oben
+// im CSS passen.
+const STATUS_COLORS = {
+  visited: "#4a8c63",
+  wishlist: "#c89a3c",
+  unvisited: "#e3dccd"
+};
+const NEUTRAL_COLOR = "#efe9de";
+
+function colorForStatus(status) {
+  if (status === "visited") return STATUS_COLORS.visited;
+  if (status === "wishlist") return STATUS_COLORS.wishlist;
+  return STATUS_COLORS.unvisited;
+}
+
+async function loadMapData() {
+  const response = await fetch(CONFIG.mapDataUrl);
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const topology = await response.json();
+  const collection = topojson.feature(topology, topology.objects.countries);
+  // IDs in den TopoJSON-Daten sind teils nullgepolstert (z. B. "090"); über
+  // Number() normalisieren, damit sie zu den Schlüsseln in COUNTRY_DATA passen.
+  return collection.features.filter((f) => String(Number(f.id)) !== CONFIG.antarcticaId);
+}
+
+function renderMap(features) {
+  worldMapEl.innerHTML = "";
+  countryPaths.clear();
+
+  mapGroupEl = document.createElementNS(svgNS, "g");
+  mapGroupEl.setAttribute("id", "mapInner");
+  worldMapEl.appendChild(mapGroupEl);
+
+  const projection = d3.geoEqualEarth().fitSize([CONFIG.mapWidth, CONFIG.mapHeight], {
+    type: "FeatureCollection",
+    features
+  });
+  const pathGenerator = d3.geoPath(projection);
+
+  features.forEach((feature) => {
+    const d = pathGenerator(feature);
+    if (!d) return;
+
+    const code = String(Number(feature.id));
+    const info = COUNTRY_DATA[code];
+
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("stroke", "#ffffff");
+    path.setAttribute("stroke-width", "0.5");
+    path.classList.add("country");
+
+    if (info) {
+      path.setAttribute("fill", colorForStatus(getStatus(code)));
+      path.addEventListener("click", () => handleMapClick(code));
+      path.addEventListener("mousemove", (e) => showTooltip(e, info.name, getStatus(code)));
+      path.addEventListener("mouseleave", hideTooltip);
+      countryPaths.set(code, path);
+    } else {
+      path.classList.add("neutral");
+      path.setAttribute("fill", NEUTRAL_COLOR);
+    }
+
+    mapGroupEl.appendChild(path);
+  });
+
+  mapLoadingEl.classList.add("hidden");
+  mapErrorEl.classList.add("hidden");
+  worldMapEl.classList.remove("hidden");
+  mapLegendEl.classList.remove("hidden");
+
+  setupZoom();
+}
+
+function updateCountryFill(code) {
+  const path = countryPaths.get(code);
+  if (path) path.setAttribute("fill", colorForStatus(getStatus(code)));
+}
+
+/* --- Zoom (Scrollrad, Pinch, Drag zum Verschieben, +/- Buttons) --- */
+function setupZoom() {
+  zoomBehavior = d3
+    .zoom()
+    .scaleExtent([1, 8])
+    .translateExtent([
+      [0, 0],
+      [CONFIG.mapWidth, CONFIG.mapHeight]
+    ])
+    .on("zoom", (event) => {
+      mapGroupEl.setAttribute("transform", event.transform);
+    });
+
+  d3.select(worldMapEl).call(zoomBehavior).on("dblclick.zoom", null);
+}
+
+function zoomBy(factor) {
+  if (!zoomBehavior) return;
+  d3.select(worldMapEl).transition().duration(200).call(zoomBehavior.scaleBy, factor);
+}
+
+function resetZoom() {
+  if (!zoomBehavior) return;
+  d3.select(worldMapEl).transition().duration(200).call(zoomBehavior.transform, d3.zoomIdentity);
+}
+
+document.getElementById("zoomInBtn").addEventListener("click", () => zoomBy(1.6));
+document.getElementById("zoomOutBtn").addEventListener("click", () => zoomBy(1 / 1.6));
+document.getElementById("zoomResetBtn").addEventListener("click", resetZoom);
+
+let worldFeatures = null;
+
+/* Erdoberfläche in km² (Standardwert), Grundlage für die Flächen-Fun-Statistik
+   – bewusst aus der bereits geladenen Kartengeometrie berechnet statt aus
+   einer von Hand getippten Pro-Land-Tabelle (siehe featureAreaKm2). */
+const EARTH_SURFACE_KM2 = 510072000;
+let totalLandAreaKm2 = null;
+
+function featureAreaKm2(feature) {
+  return (d3.geoArea(feature) / (4 * Math.PI)) * EARTH_SURFACE_KM2;
+}
+
+async function initMap() {
+  mapLoadingEl.classList.remove("hidden");
+  mapErrorEl.classList.add("hidden");
+  worldMapEl.classList.add("hidden");
+  mapLegendEl.classList.add("hidden");
+  try {
+    const features = await loadMapData();
+    worldFeatures = features;
+    totalLandAreaKm2 = worldFeatures
+      .filter((f) => COUNTRY_DATA[String(Number(f.id))])
+      .reduce((sum, f) => sum + featureAreaKm2(f), 0);
+    renderMap(features);
+    renderFunStats();
+  } catch (err) {
+    console.error("Kartendaten konnten nicht geladen werden:", err);
+    mapLoadingEl.classList.add("hidden");
+    mapErrorEl.classList.remove("hidden");
+  }
+}
+
+document.getElementById("mapRetryBtn").addEventListener("click", initMap);
+
+/* ==================================================================
+   Tooltip-Modul
+   ================================================================== */
+const tooltipEl = document.getElementById("tooltip");
+
+function statusLabel(status) {
+  if (status === "visited") return "Besucht";
+  if (status === "wishlist") return "Wunschliste";
+  return "Noch nicht besucht";
+}
+
+function showTooltip(e, name, status) {
+  tooltipEl.textContent = name + " – " + statusLabel(status);
+  tooltipEl.style.left = e.clientX + 14 + "px";
+  tooltipEl.style.top = e.clientY + 14 + "px";
+  tooltipEl.classList.remove("hidden");
+}
+
+function hideTooltip() {
+  tooltipEl.classList.add("hidden");
+}
+
+/* ==================================================================
+   Listen-Modul
+   ================================================================== */
+const countryListEl = document.getElementById("countryList");
+const searchInputEl = document.getElementById("searchInput");
+const listRows = new Map();
+
+function normalizeText(str) {
+  return str.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+const ICON_CHECK =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l4 5L19 6"></path></svg>';
+const STAR_POLYGON_POINTS =
+  "12 3 15.12 7.71 20.56 9.22 17.04 13.64 17.29 19.28 12 17.3 6.71 19.28 6.96 13.64 3.44 9.22 8.88 7.71";
+const ICON_STAR =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><polygon points="' +
+  STAR_POLYGON_POINTS +
+  '"></polygon></svg>';
+
+function buildListRow(code) {
+  const info = COUNTRY_DATA[code];
+
+  const row = document.createElement("div");
+  row.className = "country-row";
+  row.dataset.normalizedName = normalizeText(info.name);
+
+  const name = document.createElement("span");
+  name.className = "country-name";
+  name.textContent = info.name;
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+
+  const visitedBtn = document.createElement("button");
+  visitedBtn.className = "toggle-btn visited-btn";
+  visitedBtn.innerHTML = ICON_CHECK + "Besucht";
+  visitedBtn.addEventListener("click", () => handleListAction(code, "visited"));
+
+  const wishlistBtn = document.createElement("button");
+  wishlistBtn.className = "toggle-btn wishlist-btn";
+  wishlistBtn.innerHTML = ICON_STAR + "Wunschliste";
+  wishlistBtn.addEventListener("click", () => handleListAction(code, "wishlist"));
+
+  actions.appendChild(visitedBtn);
+  actions.appendChild(wishlistBtn);
+
+  row.appendChild(name);
+  row.appendChild(actions);
+
+  listRows.set(code, { row, visitedBtn, wishlistBtn });
+  return row;
+}
+
+function updateListRow(code) {
+  const entry = listRows.get(code);
+  if (!entry) return;
+  const status = getStatus(code);
+  entry.visitedBtn.classList.toggle("active", status === "visited");
+  entry.wishlistBtn.classList.toggle("active", status === "wishlist");
+}
+
+const continentGroupEls = new Map();
+
+function renderCountryList() {
+  CONTINENTS.forEach((continent) => {
+    const codesInContinent = Object.keys(COUNTRY_DATA)
+      .filter((code) => COUNTRY_DATA[code].continent === continent)
+      .sort((a, b) => COUNTRY_DATA[a].name.localeCompare(COUNTRY_DATA[b].name, "de"));
+
+    const group = document.createElement("details");
+    group.className = "continent-group";
+    group.open = false;
+
+    const summary = document.createElement("summary");
+    summary.innerHTML =
+      continent + ' <span class="count">(' + codesInContinent.length + ")</span>";
+    group.appendChild(summary);
+
+    codesInContinent.forEach((code) => {
+      const row = buildListRow(code);
+      group.appendChild(row);
+      updateListRow(code);
+    });
+
+    continentGroupEls.set(continent, group);
+    countryListEl.appendChild(group);
+  });
+}
+
+function filterList(query) {
+  const normalized = normalizeText(query.trim());
+  const isSearching = normalized.length > 0;
+
+  continentGroupEls.forEach((group) => {
+    let hasMatch = false;
+    group.querySelectorAll(".country-row").forEach((row) => {
+      const matches = row.dataset.normalizedName.includes(normalized);
+      row.classList.toggle("hidden", !matches);
+      if (matches) hasMatch = true;
+    });
+    group.open = isSearching ? hasMatch : false;
+  });
+}
+
+function debounce(fn, delay) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+searchInputEl.addEventListener("input", debounce((e) => filterList(e.target.value), 120));
+
+/* ==================================================================
+   Statistik-Modul
+   ================================================================== */
+const globalPercentEl = document.getElementById("globalPercent");
+const globalDetailEl = document.getElementById("globalDetail");
+const wishlistNoteEl = document.getElementById("wishlistNote");
+const continentStatsEl = document.getElementById("continentStats");
+
+function computeContinentStats() {
+  const groups = {};
+  CONTINENTS.forEach((c) => (groups[c] = { visited: 0, total: 0 }));
+  Object.keys(COUNTRY_DATA).forEach((code) => {
+    const continent = COUNTRY_DATA[code].continent;
+    groups[continent].total++;
+    if (state.visited.has(code)) groups[continent].visited++;
+  });
+  return groups;
+}
+
+let displayedPercent = 0;
+let percentAnimFrame = null;
+
+/** Kurze, dezente Count-up-Animation für die große Prozentzahl im Header. */
+function animatePercentTo(target) {
+  if (percentAnimFrame) cancelAnimationFrame(percentAnimFrame);
+  const start = displayedPercent;
+  const delta = target - start;
+  if (delta === 0) {
+    globalPercentEl.textContent = target + "%";
+    return;
+  }
+  const duration = 400;
+  const startTime = performance.now();
+  function step(now) {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const current = Math.round((start + delta * eased) * 10) / 10;
+    globalPercentEl.textContent = current + "%";
+    if (t < 1) {
+      percentAnimFrame = requestAnimationFrame(step);
+    } else {
+      displayedPercent = target;
+      globalPercentEl.textContent = target + "%";
+    }
+  }
+  percentAnimFrame = requestAnimationFrame(step);
+}
+
+function renderStats() {
+  const visitedCount = state.visited.size;
+  const percent = TOTAL_COUNTRIES ? Math.round((visitedCount / TOTAL_COUNTRIES) * 1000) / 10 : 0;
+
+  animatePercentTo(percent);
+  globalDetailEl.textContent =
+    visitedCount === 0
+      ? "Starte deine Reise – markiere dein erstes Land!"
+      : visitedCount + " von " + TOTAL_COUNTRIES + " Ländern besucht";
+  const wishlistCount = state.wishlist.size;
+  wishlistNoteEl.textContent = (wishlistCount === 1 ? "1 Land" : wishlistCount + " Länder") + " auf der Wunschliste";
+
+  const groups = computeContinentStats();
+  continentStatsEl.innerHTML = "";
+  CONTINENTS.forEach((continent) => {
+    const { visited, total } = groups[continent];
+    const continentPercent = total ? Math.round((visited / total) * 100) : 0;
+
+    const row = document.createElement("div");
+    row.className = "continent-row";
+
+    const header = document.createElement("div");
+    header.className = "continent-row-header";
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = continent;
+    const valueSpan = document.createElement("span");
+    valueSpan.textContent = visited + " / " + total + " (" + continentPercent + "%)";
+    header.appendChild(nameSpan);
+    header.appendChild(valueSpan);
+
+    const track = document.createElement("div");
+    track.className = "progress-track";
+    const fill = document.createElement("div");
+    fill.className = "progress-fill";
+    fill.style.width = continentPercent + "%";
+    track.appendChild(fill);
+
+    row.appendChild(header);
+    row.appendChild(track);
+    continentStatsEl.appendChild(row);
+  });
+}
+
+const funStatsListEl = document.getElementById("funStatsList");
+
+function renderFunStats() {
+  const rows = [];
+
+  if (totalLandAreaKm2 && state.visited.size) {
+    const visitedAreaKm2 = worldFeatures
+      .filter((f) => state.visited.has(String(Number(f.id))))
+      .reduce((sum, f) => sum + featureAreaKm2(f), 0);
+    const pct = Math.round((visitedAreaKm2 / totalLandAreaKm2) * 100);
+    rows.push({ icon: "🌍", html: "Du hast rund <strong>" + pct + " %</strong> der Landfläche aller Länder bereist." });
+  }
+
+  const continentStats = computeContinentStats();
+  const bestContinent = Object.keys(continentStats)
+    .map((name) => ({
+      name,
+      visited: continentStats[name].visited,
+      total: continentStats[name].total,
+      pct: continentStats[name].total ? continentStats[name].visited / continentStats[name].total : 0
+    }))
+    .filter((c) => c.visited > 0)
+    .sort((a, b) => b.pct - a.pct)[0];
+  if (bestContinent) {
+    rows.push({
+      icon: "🏆",
+      html: "Dein bestbereister Kontinent: <strong>" + bestContinent.name + "</strong> (" + Math.round(bestContinent.pct * 100) + " %)."
+    });
+  }
+
+  let best = null;
+  state.ratings.forEach((_, code) => {
+    const score = computeCountryScore(code);
+    if (score && (!best || score.avg > best.score.avg)) best = { code, score };
+  });
+  if (best) {
+    rows.push({
+      icon: "⭐",
+      html: "Dein Favorit laut Bewertung: <strong>" + COUNTRY_DATA[best.code].name + "</strong> (" + formatScore(best.score.avg) + ")."
+    });
+  }
+
+  funStatsListEl.innerHTML = rows.length
+    ? rows
+        .map((r) => '<div class="fun-stat-row"><span class="fun-stat-icon">' + r.icon + '</span><span class="fun-stat-text">' + r.html + "</span></div>")
+        .join("")
+    : '<p class="footnote">Markiere Länder und vergib Bewertungen, um hier Statistiken zu sehen.</p>';
+}
+
+/* ==================================================================
+   Erfolge-Modul: kleine Meilensteine als Motivation
+   ================================================================== */
+const achievementsListEl = document.getElementById("achievementsList");
+
+const MILESTONES = [
+  { id: "first", label: "Erstes Land besucht", test: (s) => s.visited >= 1 },
+  { id: "5", label: "5 Länder bereist", test: (s) => s.visited >= 5 },
+  { id: "10", label: "10 Länder bereist", test: (s) => s.visited >= 10 },
+  { id: "25", label: "25 Länder bereist", test: (s) => s.visited >= 25 },
+  { id: "50", label: "50 Länder bereist", test: (s) => s.visited >= 50 },
+  { id: "100", label: "100 Länder bereist", test: (s) => s.visited >= 100 },
+  { id: "pct10", label: "10 % der Welt bereist", test: (s) => s.percent >= 10 },
+  { id: "pct25", label: "25 % der Welt bereist", test: (s) => s.percent >= 25 },
+  { id: "pct50", label: "50 % der Welt bereist", test: (s) => s.percent >= 50 },
+  {
+    id: "allContinentsStarted",
+    label: "Jeden Kontinent angefangen",
+    test: (s) => CONTINENTS.every((c) => s.continents[c].visited > 0)
+  },
+  ...CONTINENTS.map((c) => ({
+    id: "complete-" + c,
+    label: c + " komplett bereist",
+    test: (s) => s.continents[c].visited === s.continents[c].total
+  }))
+];
+
+let earnedMilestoneIds = new Set();
+
+function showAchievementToast(milestone) {
+  const toast = document.createElement("div");
+  toast.className = "achievement-toast";
+  toast.innerHTML = "Erfolg freigeschaltet: <em>" + milestone.label + "</em>";
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add("show"));
+  setTimeout(() => {
+    toast.classList.remove("show");
+    setTimeout(() => toast.remove(), 300);
+  }, 3200);
+}
+
+function renderAchievements(opts) {
+  const silent = !!(opts && opts.silent);
+  const statsCtx = {
+    visited: state.visited.size,
+    percent: TOTAL_COUNTRIES ? (state.visited.size / TOTAL_COUNTRIES) * 100 : 0,
+    continents: computeContinentStats()
+  };
+
+  const stillEarnedIds = new Set();
+  const newlyEarned = [];
+  MILESTONES.forEach((m) => {
+    if (m.test(statsCtx)) {
+      stillEarnedIds.add(m.id);
+      if (!earnedMilestoneIds.has(m.id)) newlyEarned.push(m);
+    }
+  });
+  earnedMilestoneIds = stillEarnedIds;
+
+  achievementsListEl.innerHTML = "";
+  if (stillEarnedIds.size === 0) {
+    const empty = document.createElement("p");
+    empty.className = "footnote";
+    empty.textContent = "Noch keine Erfolge freigeschaltet – markiere dein erstes Land!";
+    achievementsListEl.appendChild(empty);
+  } else {
+    MILESTONES.filter((m) => stillEarnedIds.has(m.id)).forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "achievement-row";
+      row.innerHTML = ICON_CHECK + "<span>" + m.label + "</span>";
+      achievementsListEl.appendChild(row);
+    });
+  }
+
+  if (!silent) newlyEarned.forEach(showAchievementToast);
+}
+
+/* ==================================================================
+   Bewertungs-Modul: Länder nach Kriterien bewerten, Tier-List
+   ================================================================== */
+const tierListEl = document.getElementById("tierList");
+const unratedListEl = document.getElementById("unratedList");
+const ratingsListEl = document.getElementById("ratingsList");
+const ratingsSearchInputEl = document.getElementById("ratingsSearchInput");
+const ratingRows = new Map(); // code -> { row, scoreBadge, hint, starRows }
+
+const ICON_STAR_FILLED =
+  '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="' + STAR_POLYGON_POINTS + '"></polygon></svg>';
+const STAR_RATING_BTN_MARKUP =
+  '<span class="star-outline">' + ICON_STAR + '</span><span class="star-fill">' + ICON_STAR_FILLED + "</span>";
+
+function computeCountryScore(code) {
+  const obj = state.ratings.get(code);
+  if (!obj) return null;
+  const vals = RATING_CRITERIA.map((c) => obj[c.id]).filter((v) => typeof v === "number");
+  if (!vals.length) return null;
+  return { avg: vals.reduce((a, b) => a + b, 0) / vals.length, count: vals.length };
+}
+
+function tierForScore(avg) {
+  return TIER_DEFS.find((t) => avg >= t.min) || TIER_DEFS[TIER_DEFS.length - 1];
+}
+
+function formatScore(avg) {
+  return avg.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function setRating(code, criterionId, value) {
+  let obj = state.ratings.get(code);
+  if (!obj) { obj = {}; state.ratings.set(code, obj); }
+  obj[criterionId] = obj[criterionId] === value ? undefined : value; // erneutes Antippen auf denselben Wert löscht ihn
+  if (!RATING_CRITERIA.some((c) => typeof obj[c.id] === "number")) state.ratings.delete(code);
+  saveState();
+  updateRatingRow(code);
+  renderTierList();
+  renderUnratedList();
+  renderFunStats();
+}
+
+function buildStarRating(code, criterionId) {
+  const wrap = document.createElement("div");
+  wrap.className = "star-rating";
+  wrap.setAttribute("role", "radiogroup");
+  for (let v = 1; v <= 5; v++) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "star-btn";
+    btn.dataset.value = String(v);
+    btn.setAttribute("aria-label", v + " Sterne");
+    btn.innerHTML = STAR_RATING_BTN_MARKUP;
+    btn.addEventListener("click", (e) => {
+      const rect = btn.getBoundingClientRect();
+      const half = e.clientX - rect.left < rect.width / 2;
+      setRating(code, criterionId, half ? v - 0.5 : v);
+    });
+    wrap.appendChild(btn);
+  }
+  return wrap;
+}
+
+function refreshStarRating(wrap, value) {
+  Array.from(wrap.children).forEach((btn) => {
+    const v = Number(btn.dataset.value);
+    const fill = typeof value === "number" ? Math.max(0, Math.min(1, value - (v - 1))) : 0;
+    btn.style.setProperty("--fill", fill * 100 + "%");
+    btn.classList.toggle("active", fill > 0);
+  });
+}
+
+function buildRatingRow(code) {
+  const info = COUNTRY_DATA[code];
+  const row = document.createElement("div");
+  row.className = "rating-row";
+  row.dataset.normalizedName = normalizeText(info.name);
+  row.dataset.code = code;
+
+  const header = document.createElement("button");
+  header.type = "button";
+  header.className = "rating-row-header";
+  const scoreBadge = document.createElement("span");
+  scoreBadge.className = "score-badge";
+  header.innerHTML = '<span class="country-name">' + info.name + "</span>";
+  header.appendChild(scoreBadge);
+  header.addEventListener("click", () => row.classList.toggle("expanded"));
+
+  const body = document.createElement("div");
+  body.className = "rating-row-body";
+  const hint = document.createElement("p");
+  hint.className = "rating-hint footnote";
+  body.appendChild(hint);
+
+  const starRows = {};
+  RATING_CRITERIA.forEach((crit) => {
+    const crow = document.createElement("div");
+    crow.className = "rating-criterion-row";
+    const label = document.createElement("span");
+    label.textContent = crit.label;
+    const stars = buildStarRating(code, crit.id);
+    crow.appendChild(label);
+    crow.appendChild(stars);
+    body.appendChild(crow);
+    starRows[crit.id] = stars;
+  });
+
+  row.appendChild(header);
+  row.appendChild(body);
+  ratingRows.set(code, { row, scoreBadge, hint, starRows });
+  return row;
+}
+
+function updateRatingRow(code) {
+  const entry = ratingRows.get(code);
+  if (!entry) return;
+  const obj = state.ratings.get(code) || {};
+  RATING_CRITERIA.forEach((crit) => refreshStarRating(entry.starRows[crit.id], obj[crit.id]));
+  const score = computeCountryScore(code);
+  entry.hint.textContent = (score ? score.count : 0) + " von " + RATING_CRITERIA.length + " Kriterien bewertet";
+  entry.scoreBadge.textContent = score ? formatScore(score.avg) : "–";
+  entry.scoreBadge.className = "score-badge" + (score ? " tier-" + tierForScore(score.avg).id.toLowerCase() : "");
+}
+
+function renderRatingsList() {
+  ratingsListEl.innerHTML = "";
+  ratingRows.clear();
+  const codes = Array.from(state.visited)
+    .filter((code) => COUNTRY_DATA[code])
+    .sort((a, b) => COUNTRY_DATA[a].name.localeCompare(COUNTRY_DATA[b].name, "de"));
+  if (!codes.length) {
+    ratingsListEl.innerHTML = '<p class="footnote">Markiere zuerst Länder als besucht, um sie bewerten zu können.</p>';
+    return;
+  }
+  codes.forEach((code) => {
+    ratingsListEl.appendChild(buildRatingRow(code));
+    updateRatingRow(code);
+  });
+}
+
+function filterRatingsList(query) {
+  const normalized = normalizeText(query.trim());
+  ratingsListEl.querySelectorAll(".rating-row").forEach((row) => {
+    row.classList.toggle("hidden", !row.dataset.normalizedName.includes(normalized));
+  });
+}
+ratingsSearchInputEl.addEventListener("input", debounce((e) => filterRatingsList(e.target.value), 120));
+
+function scrollToRatingRow(code) {
+  const entry = ratingRows.get(code);
+  if (!entry) return;
+  entry.row.classList.add("expanded");
+  entry.row.scrollIntoView({ behavior: "smooth", block: "center" });
+  entry.row.classList.add("highlight");
+  setTimeout(() => entry.row.classList.remove("highlight"), 1200);
+}
+
+function renderTierList() {
+  tierListEl.innerHTML = "";
+  const scored = Array.from(state.visited)
+    .filter((code) => COUNTRY_DATA[code])
+    .map((code) => ({ code, score: computeCountryScore(code) }))
+    .filter((e) => e.score);
+
+  TIER_DEFS.forEach((tier) => {
+    const entries = scored
+      .filter((e) => tierForScore(e.score.avg).id === tier.id)
+      .sort((a, b) => b.score.avg - a.score.avg);
+
+    const band = document.createElement("div");
+    band.className = "tier-band tier-" + tier.id.toLowerCase();
+    band.innerHTML =
+      '<div class="tier-band-label"><span class="tier-letter">' + tier.label + '</span><span class="tier-name">' + tier.name + "</span></div>";
+    const chips = document.createElement("div");
+    chips.className = "tier-chips";
+    if (!entries.length) {
+      chips.innerHTML = '<span class="tier-empty">Noch keine Länder</span>';
+    } else {
+      entries.forEach((e) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "tier-chip" + (e.score.count < RATING_PRELIMINARY_THRESHOLD ? " tier-chip-preliminary" : "");
+        chip.title = e.score.count < RATING_PRELIMINARY_THRESHOLD ? "Vorläufig – erst " + e.score.count + " von " + RATING_CRITERIA.length + " Kriterien bewertet" : "";
+        chip.innerHTML =
+          '<span class="tier-chip-flag">' + countryFlag(e.code) + "</span>" +
+          '<span class="tier-chip-caption">' + COUNTRY_DATA[e.code].name +
+          '<span class="tier-chip-score"> ' + formatScore(e.score.avg) + "</span></span>";
+        chip.addEventListener("click", () => scrollToRatingRow(e.code));
+        chips.appendChild(chip);
+      });
+    }
+    band.appendChild(chips);
+    tierListEl.appendChild(band);
+  });
+}
+
+function renderUnratedList() {
+  const unrated = Array.from(state.visited)
+    .filter((code) => COUNTRY_DATA[code] && !computeCountryScore(code))
+    .sort((a, b) => COUNTRY_DATA[a].name.localeCompare(COUNTRY_DATA[b].name, "de"));
+  unratedListEl.innerHTML = "";
+  if (!unrated.length) {
+    unratedListEl.innerHTML = '<p class="footnote">Alle besuchten Länder sind bewertet.</p>';
+    return;
+  }
+  unrated.forEach((code) => {
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "unrated-pill";
+    pill.innerHTML = COUNTRY_DATA[code].name + '<span class="unrated-cta">Jetzt bewerten</span>';
+    pill.addEventListener("click", () => scrollToRatingRow(code));
+    unratedListEl.appendChild(pill);
+  });
+}
+
+function renderRatingsTab() {
+  renderRatingsList();
+  renderTierList();
+  renderUnratedList();
+}
+
+/* --- Tab-Umschaltung (gleiches .hidden-Muster wie das Export-Modal) --- */
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => {
+      b.classList.toggle("active", b === btn);
+      b.setAttribute("aria-selected", b === btn ? "true" : "false");
+    });
+    document.getElementById("tabPanelEntdecken").classList.toggle("hidden", btn.dataset.tab !== "entdecken");
+    document.getElementById("tabPanelBewertungen").classList.toggle("hidden", btn.dataset.tab !== "bewertungen");
+  });
+});
+
+/* ==================================================================
+   Reisepass-Modul: ein Stempel pro besuchtem Land, direkt auf der Seite
+   ================================================================== */
+const stampsGridEl = document.getElementById("stampsGrid");
+
+function hashStringToInt(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// Kräftige "Stempel-Tinten"-Töne, angelehnt an echte Visa-/Flughafenstempel –
+// bunter als die gedeckte Vintage-Palette der restlichen Seite, aber kuratiert
+// statt grell.
+const STAMP_PALETTE = [
+  { ink: "#d1267d", soft: "#fcebf3" },
+  { ink: "#0f8fae", soft: "#e8f6fa" },
+  { ink: "#5b3fae", soft: "#efeafb" },
+  { ink: "#2f8f4e", soft: "#e9f7ee" },
+  { ink: "#1f5fae", soft: "#e8f0fb" },
+  { ink: "#d9731f", soft: "#fcefe3" },
+  { ink: "#9c2b2b", soft: "#f9e9e9" },
+  { ink: "#6b8f1f", soft: "#f1f6e3" }
+];
+
+const STAMP_SHAPES = ["circle", "oval", "rect", "diamond"];
+const STAMP_BORDERS = ["double", "dashed", "dotted"];
+
+const ICON_PLANE =
+  '<svg class="stamp-plane-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2.5 1.5V22l4-1 4 1v-1.5L13 19v-5.5l8 2.5z"/></svg>';
+
+const MONTH_SHORT_DE = ["Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"];
+
+function formatVisitDate(value) {
+  const parts = String(value).split("-");
+  const monthIndex = parseInt(parts[1], 10) - 1;
+  const monthLabel = MONTH_SHORT_DE[monthIndex] || parts[1];
+  return monthLabel + " " + parts[0];
+}
+
+/** Erzeugt für jeden Stempel eine leicht unregelmäßige, organische Kreisform
+ * (statt eines perfekten Kreises) – wirkt handgestempelt statt geometrisch. */
+function stampBlobRadius(seed) {
+  const vals = [];
+  for (let i = 0; i < 8; i++) vals.push(44 + ((seed >> (i * 3)) % 12) + "%");
+  return vals.slice(0, 4).join(" ") + " / " + vals.slice(4, 8).join(" ");
+}
+
+function renderStampDisplay(stamp, code) {
+  stamp.classList.remove("editing");
+  const inner = stamp.querySelector(".stamp-inner");
+  const info = COUNTRY_DATA[code];
+  const dateVal = state.visitDates.get(code);
+  const seed = hashStringToInt(code + info.name);
+  const showPlane = Math.floor(seed / 12) % 2 === 0;
+  inner.innerHTML =
+    (showPlane ? ICON_PLANE : "") +
+    '<span class="stamp-name">' + info.name + "</span>" +
+    (dateVal
+      ? '<span class="stamp-date">' + formatVisitDate(dateVal) + "</span>"
+      : '<span class="stamp-date stamp-date-hint">+ Datum</span>');
+}
+
+function commitStampDate(stamp, code, value) {
+  if (value) state.visitDates.set(code, value);
+  else state.visitDates.delete(code);
+  saveState();
+  // Der Stempel kann zwischenzeitlich verschwunden sein, wenn währenddessen
+  // woanders der Status eines Landes geändert wurde (renderStamps() baut dann
+  // das komplette Raster neu auf) – in dem Fall einfach komplett neu rendern,
+  // statt den nicht mehr vorhandenen Knoten zu verändern.
+  if (stamp.isConnected) {
+    renderStampDisplay(stamp, code);
+  } else {
+    renderStamps();
+  }
+}
+
+function buildMonthOptions(selected) {
+  let html = '<option value="">MM</option>';
+  MONTH_SHORT_DE.forEach((m, i) => {
+    const val = String(i + 1).padStart(2, "0");
+    html += '<option value="' + val + '"' + (val === selected ? " selected" : "") + ">" + m + "</option>";
+  });
+  return html;
+}
+
+function buildYearOptions(selected) {
+  const currentYear = new Date().getFullYear();
+  let html = '<option value="">JJJJ</option>';
+  for (let y = currentYear; y >= currentYear - 50; y--) {
+    html += '<option value="' + y + '"' + (String(y) === selected ? " selected" : "") + ">" + y + "</option>";
+  }
+  return html;
+}
+
+/**
+ * Öffnet die Datums-Eingabe direkt im Stempel: zwei feste Auswahl-Kästchen
+ * (Monat/Jahr) statt eines nativen, browserabhängig aussehenden Datumsfelds.
+ * Sobald beide gesetzt sind, wird automatisch gespeichert; ein Klick außerhalb
+ * des Stempels bricht eine unvollständige Eingabe ab.
+ */
+function startStampDateEdit(stamp, code) {
+  stamp.classList.add("editing");
+  const inner = stamp.querySelector(".stamp-inner");
+  const current = state.visitDates.get(code) || "";
+  const parts = current ? current.split("-") : ["", ""];
+  const curYear = parts[0];
+  const curMonth = parts[1];
+
+  inner.innerHTML =
+    '<div class="stamp-date-fields">' +
+    '<select class="stamp-date-month" aria-label="Reisemonat">' +
+    buildMonthOptions(curMonth) +
+    "</select>" +
+    '<select class="stamp-date-year" aria-label="Reisejahr">' +
+    buildYearOptions(curYear) +
+    "</select>" +
+    (current ? '<button type="button" class="stamp-date-clear" aria-label="Datum entfernen">×</button>' : "") +
+    "</div>";
+
+  const monthSel = inner.querySelector(".stamp-date-month");
+  const yearSel = inner.querySelector(".stamp-date-year");
+  const clearBtn = inner.querySelector(".stamp-date-clear");
+
+  function handleOutsideClick(e) {
+    if (stamp.contains(e.target)) return;
+    document.removeEventListener("click", handleOutsideClick);
+    if (stamp.isConnected && stamp.classList.contains("editing")) {
+      renderStampDisplay(stamp, code);
+    }
+  }
+
+  function tryCommit() {
+    if (monthSel.value && yearSel.value) {
+      document.removeEventListener("click", handleOutsideClick);
+      commitStampDate(stamp, code, yearSel.value + "-" + monthSel.value);
+    }
+  }
+
+  [monthSel, yearSel].forEach((sel) => {
+    sel.addEventListener("click", (e) => e.stopPropagation());
+    sel.addEventListener("change", tryCommit);
+  });
+
+  if (clearBtn) {
+    clearBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.removeEventListener("click", handleOutsideClick);
+      commitStampDate(stamp, code, "");
+    });
+  }
+
+  setTimeout(() => document.addEventListener("click", handleOutsideClick), 0);
+}
+
+function renderStamps() {
+  const codes = Array.from(state.visited)
+    .filter((code) => COUNTRY_DATA[code])
+    .sort((a, b) => COUNTRY_DATA[a].name.localeCompare(COUNTRY_DATA[b].name, "de"));
+
+  stampsGridEl.innerHTML = "";
+  if (!codes.length) {
+    const empty = document.createElement("p");
+    empty.className = "stamps-empty";
+    empty.textContent = "Noch keine Stempel – markiere dein erstes Land!";
+    stampsGridEl.appendChild(empty);
+    return;
+  }
+
+  codes.forEach((code) => {
+    const seed = hashStringToInt(code + COUNTRY_DATA[code].name);
+    const rotation = ((seed % 1000) / 1000 - 0.5) * 28; // ca. -14° bis 14°
+    const base = 88 + (seed % 5) * 6; // 88–112px Grundgröße
+    const palette = STAMP_PALETTE[seed % STAMP_PALETTE.length];
+    const shape = STAMP_SHAPES[seed % STAMP_SHAPES.length];
+    const borderStyle = STAMP_BORDERS[Math.floor(seed / 4) % STAMP_BORDERS.length];
+
+    let w = base;
+    let h = base;
+    if (shape === "oval") {
+      w = Math.round(base * 1.3);
+      h = Math.round(base * 0.82);
+    } else if (shape === "rect") {
+      w = Math.round(base * 1.22);
+      h = Math.round(base * 0.88);
+    }
+
+    const stamp = document.createElement("div");
+    stamp.className = "stamp stamp-shape-" + shape + " stamp-border-" + borderStyle;
+    stamp.dataset.code = code;
+    stamp.style.setProperty("--rot", rotation.toFixed(1) + "deg");
+    stamp.style.setProperty("--ink", palette.ink);
+    stamp.style.setProperty("--ink-soft", palette.soft);
+    stamp.style.width = w + "px";
+    stamp.style.height = h + "px";
+    if (shape === "circle") {
+      stamp.style.borderRadius = stampBlobRadius(seed);
+    }
+
+    const inner = document.createElement("div");
+    inner.className = "stamp-inner";
+    stamp.appendChild(inner);
+
+    renderStampDisplay(stamp, code);
+
+    stamp.addEventListener("click", () => {
+      if (stamp.classList.contains("editing")) return;
+      startStampDateEdit(stamp, code);
+    });
+
+    stampsGridEl.appendChild(stamp);
+  });
+}
+
+/* ==================================================================
+   Export-Dialog-Modul: personalisierte, social-media-taugliche
+   Bildexporte (mehrere Formate und Farbthemen), per Canvas
+   gerendert (keine CSS-Variablen -> keine Auflösungsprobleme beim Export).
+   ================================================================== */
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function triggerDownload(url, filename) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function slugify(str) {
+  const slug = normalizeText(str).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "reise-tracker";
+}
+
+const EXPORT_FORMATS = {
+  square: { label: "Quadrat", width: 1080, height: 1080 },
+  portrait: { label: "Hochformat", width: 1080, height: 1350 },
+  story: { label: "Story", width: 1080, height: 1920 },
+  landscape: { label: "Querformat", width: 1920, height: 1080 }
+};
+
+// Kräftigere, deckende Farben statt feiner Transparenzen: Länder und ihre
+// Grenzen sollen auf den Social-Media-Bildern klar erkennbar bleiben, auch bei
+// kleiner Darstellung (z. B. als Thumbnail in einer Story).
+// Pastellige, angenehme Flächenfarben; die Konturlinie ist bewusst dünn, muss
+// aber gegen die Flächenfarbe (nicht nur gegen den Hintergrund) Kontrast
+// haben, sonst verschwimmen benachbarte Länder mit demselben Status ineinander.
+const EXPORT_THEMES = {
+  classic: {
+    label: "Klassisch",
+    background: ["#f5f6fc", "#e3e7fb"],
+    title: "#20232b",
+    subtitle: "#6b7280",
+    accent: "#6366f1",
+    visited: "#34c77b",
+    wishlist: "#fbbf24",
+    unvisited: "#c7cce0",
+    neutral: "#e1e4ee",
+    stroke: "rgba(255,255,255,0.95)"
+  },
+  dark: {
+    label: "Dunkel",
+    background: ["#111827", "#1f2a3d"],
+    title: "#f8fafc",
+    subtitle: "#9aa5b8",
+    accent: "#38bdf8",
+    visited: "#34d399",
+    wishlist: "#fbbf24",
+    unvisited: "#4b5873",
+    neutral: "#2f3a52",
+    stroke: "rgba(255,255,255,0.22)"
+  },
+  sunset: {
+    label: "Sunset",
+    background: ["#ffb199", "#b98bd4"],
+    title: "#ffffff",
+    subtitle: "rgba(255,255,255,0.88)",
+    accent: "#ffffff",
+    visited: "#2dd4bf",
+    wishlist: "#fde047",
+    unvisited: "#fff4ec",
+    neutral: "#ece3e8",
+    stroke: "rgba(139,95,163,0.4)"
+  },
+  ocean: {
+    label: "Ozean",
+    background: ["#5aa9c9", "#1f7a9c"],
+    title: "#ffffff",
+    subtitle: "rgba(255,255,255,0.88)",
+    accent: "#bef264",
+    visited: "#ff6f91",
+    wishlist: "#fdba74",
+    unvisited: "#eaf6fb",
+    neutral: "#c7e6f0",
+    stroke: "rgba(31,122,156,0.4)"
+  },
+  vintage: {
+    label: "Vintage",
+    background: ["#faf8f4", "#f0e6d8"],
+    title: "#2a2420",
+    subtitle: "#79705f",
+    accent: "#b8512a",
+    visited: "#3d7a54",
+    wishlist: "#b8872f",
+    unvisited: "#e8e0d1",
+    neutral: "#efe9de",
+    stroke: "rgba(255,255,255,0.9)"
+  },
+  mono: {
+    label: "Mono",
+    background: ["#f7f3ea", "#ece4d3"],
+    title: "#2a2420",
+    subtitle: "#6b6355",
+    accent: "#2a2420",
+    visited: "#2f4a3a",
+    wishlist: "#a9822e",
+    unvisited: "#dcd2bc",
+    neutral: "#ece4d3",
+    stroke: "rgba(42,36,32,0.5)"
+  }
+};
+
+const exportState = { content: "map", format: "square", theme: "classic", title: "" };
+let userEditedTitle = false;
+
+function defaultTitle(content) {
+  return content === "tierlist" ? "Meine Länder-Rangliste" : "Meine Weltreise";
+}
+
+const EXPORT_FONT_DISPLAY = "'Playfair Display', Georgia, 'Times New Roman', serif";
+const EXPORT_FONT_BODY = "'IBM Plex Sans', -apple-system, 'Segoe UI', Arial, sans-serif";
+const EXPORT_FONT_MONO = "'Courier Prime', 'Courier New', monospace";
+
+let exportFontsPromise = null;
+/**
+ * Lädt die für den Canvas-Export benötigten Schriftschnitte gezielt vor.
+ * <canvas> übernimmt eine Web-Schriftart nur, wenn sie beim Zeichnen bereits
+ * vollständig geladen ist, sonst wird still auf die Standardschrift
+ * zurückgefallen. Schlägt das Laden fehl (z. B. offline), greift die in den
+ * Font-Strings hinterlegte Fallback-Kette.
+ */
+function ensureExportFontsLoaded() {
+  if (!exportFontsPromise) {
+    exportFontsPromise = Promise.all([
+      document.fonts.load("700 60px 'Playfair Display'"),
+      document.fonts.load("900 60px 'Playfair Display'"),
+      document.fonts.load("600 16px 'IBM Plex Sans'"),
+      document.fonts.load("700 16px 'Courier Prime'")
+    ])
+      .catch(() => {})
+      // Zweite Absicherung: erst wenn der Browser WIRKLICH alle angeforderten
+      // Schriftarten als bereit meldet, gilt das Laden als abgeschlossen.
+      .then(() => document.fonts.ready)
+      .catch(() => {});
+  }
+  return exportFontsPromise;
+}
+ensureExportFontsLoaded();
+
+function wrapText(ctx, text, maxWidth) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = "";
+  words.forEach((word) => {
+    const test = current ? current + " " + word : word;
+    if (current && ctx.measureText(test).width > maxWidth) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = test;
+    }
+  });
+  if (current) lines.push(current);
+  return lines.slice(0, 2);
+}
+
+function drawExportImage(ctx, width, height, opts) {
+  if (opts.content === "tierlist") {
+    drawTierListExportImage(ctx, width, height, opts);
+    return;
+  }
+
+  const theme = EXPORT_THEMES[opts.theme];
+  const fontStack = EXPORT_FONT_BODY;
+
+  ctx.clearRect(0, 0, width, height);
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, theme.background[0]);
+  grad.addColorStop(1, theme.background[1]);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+
+  // Gestrichelter Rahmen nahe am Bildrand – greift die gestrichelten
+  // Pass-/Bordkarten-Umrandungen der Stempel und des Headers auf. Macht
+  // überschüssigen Rand (v. a. bei hohen Formaten, wo die Weltkarte nicht
+  // beliebig in die Höhe gezoomt werden kann, ohne Kontinente zu verlieren)
+  // zu einem bewussten gestalterischen Element statt einer "leeren Fläche".
+  const frameInset = Math.min(width, height) * 0.025;
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = Math.max(1, width / 600);
+  ctx.setLineDash([width / 70, width / 90]);
+  ctx.strokeRect(frameInset, frameInset, width - frameInset * 2, height - frameInset * 2);
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Schmaler Seitenrand, damit die Karte möglichst viel Breite bekommt.
+  const padX = width * 0.05;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // --- Titel: Größe/Zeilenumbruch vorab berechnen (noch ohne Position) ---
+  const title = (opts.title && opts.title.trim()) || defaultTitle(opts.content);
+  const maxTitleWidth = width - padX * 2;
+  let titleSize = Math.round(width * 0.065);
+  const minTitleSize = Math.round(width * 0.038);
+  ctx.letterSpacing = "-0.5px";
+  ctx.font = "700 " + titleSize + "px " + EXPORT_FONT_DISPLAY;
+  while (ctx.measureText(title).width > maxTitleWidth && titleSize > minTitleSize) {
+    titleSize -= 2;
+    ctx.font = "700 " + titleSize + "px " + EXPORT_FONT_DISPLAY;
+  }
+  const titleLines = ctx.measureText(title).width > maxTitleWidth ? wrapText(ctx, title, maxTitleWidth) : [title];
+  const titleBlockH = titleSize + (titleLines.length - 1) * titleSize * 1.15;
+
+  // --- Statistik-Höhe vorab berechnen (ebenfalls unabhängig von der Position) ---
+  const stats = { visited: state.visited.size, total: TOTAL_COUNTRIES };
+  const percent = stats.total ? Math.round((stats.visited / stats.total) * 1000) / 10 : 0;
+  const wishlistCount = state.wishlist.size;
+
+  const bigSize = Math.round(width * 0.09);
+  const detailSize = Math.round(width * 0.024);
+  const smallSize = Math.round(width * 0.019);
+  const statsHeight = bigSize + detailSize * 1.7 + (wishlistCount > 0 ? smallSize * 1.8 : 0) + detailSize * 0.6;
+
+  const outerMargin = height * 0.05;
+  const gapTitleMap = height * 0.035;
+  const gapMapLegend = height * 0.03;
+  const gapLegendStats = height * 0.025;
+  const legendFontSize = Math.round(width * 0.019);
+  const legendHeight = legendFontSize * 1.6;
+  const mapBoxW = width - padX * 2;
+  const maxMapH = Math.max(
+    60,
+    height - outerMargin * 2 - titleBlockH - gapTitleMap - gapMapLegend - legendHeight - gapLegendStats - statsHeight
+  );
+
+  // "Cover" statt "Contain": Die Karte muss die Box in BEIDEN Dimensionen
+  // füllen, sonst entsteht bei hohen Formaten (Story, Hochformat) Leerraum
+  // über/unter der Karte. Grönland/Antarktis sind ohnehin nicht in
+  // COUNTRY_DATA enthalten – ein Beschnitt an den äußersten Polrändern ist
+  // ein bei Reisekarten üblicher, akzeptabler Trade-off.
+  let mapFit = null;
+  let mapH = 0;
+  if (worldFeatures && worldFeatures.length) {
+    const fitFeatures = worldFeatures.filter((f) => COUNTRY_DATA[String(Number(f.id))]);
+    const featureCollection = { type: "FeatureCollection", features: fitFeatures.length ? fitFeatures : worldFeatures };
+    const fitAndBounds = (boxW, boxH) => {
+      const projection = d3.geoEqualEarth().fitSize([boxW, boxH], featureCollection);
+      const pathGen = d3.geoPath(projection, ctx);
+      const bounds = pathGen.bounds(featureCollection);
+      return { pathGen, bounds, w: bounds[1][0] - bounds[0][0], h: bounds[1][1] - bounds[0][1] };
+    };
+
+    mapFit = fitAndBounds(mapBoxW, maxMapH);
+    if (mapFit.h < maxMapH - 1) {
+      // Die Welt ist von Natur aus sehr breit (~2.3:1) – sie bei sehr hohen
+      // Formaten (Story, Hochformat) vollständig höhenfüllend zu zoomen,
+      // würde einen so starken seitlichen Beschnitt erfordern, dass ganze
+      // Kontinente (Asien, Australien, Südamerika) aus dem Bild fallen. Das
+      // widerspricht "alle Länder erkennbar" stärker, als ein verbleibender
+      // Leerraum der Lesbarkeit schadet. Der Zoom bleibt daher bewusst
+      // moderat (max. 15 % mehr Breite als die Box) – ein spürbar größeres,
+      // aber weiterhin vollständiges Kartenbild. Der verbleibende Rand wird
+      // stattdessen über den gestrichelten Rahmen (siehe weiter unten) als
+      // gestalterisches Element statt als "leere Fläche" lesbar gemacht.
+      const zoomFactor = Math.min(1.15, maxMapH / mapFit.h);
+      mapFit = fitAndBounds(mapBoxW * zoomFactor, maxMapH * 10);
+    }
+    mapH = Math.min(mapFit.h, maxMapH);
+  }
+
+  // --- Gesamtblock (Titel + Karte + Statistik) vertikal zentrieren, statt
+  // ihn oben zu verankern – übriger Platz verteilt sich dadurch gleichmäßig
+  // oben/unten, statt sich komplett unten anzusammeln. ---
+  const totalContentH = titleBlockH + gapTitleMap + mapH + gapMapLegend + legendHeight + gapLegendStats + statsHeight;
+  const innerH = height - outerMargin * 2;
+  const titleTop = outerMargin + Math.max(0, (innerH - totalContentH) / 2);
+  const titleBottom = titleTop + titleBlockH;
+
+  ctx.fillStyle = theme.title;
+  titleLines.forEach((line, i) => {
+    ctx.fillText(line, width / 2, titleTop + titleSize + i * titleSize * 1.15);
+  });
+  ctx.letterSpacing = "0px";
+
+  // Dezente Trennlinie unter dem Titel als kleines gestalterisches Element.
+  const ruleY = titleBottom + height * 0.016;
+  const ruleW = width * 0.09;
+  ctx.save();
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = Math.max(1, width / 700);
+  ctx.beginPath();
+  ctx.moveTo(width / 2 - ruleW / 2, ruleY);
+  ctx.lineTo(width / 2 + ruleW / 2, ruleY);
+  ctx.stroke();
+  ctx.restore();
+
+  const mapTop = titleBottom + gapTitleMap;
+  let mapBottom = mapTop;
+
+  if (mapFit) {
+    const mapLeft = padX + (mapBoxW - mapFit.w) / 2;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(padX, mapTop, mapBoxW, mapH);
+    ctx.clip();
+    ctx.translate(mapLeft - mapFit.bounds[0][0], mapTop - mapFit.bounds[0][1]);
+    ctx.lineJoin = "round";
+    worldFeatures.forEach((feature) => {
+      const code = String(Number(feature.id));
+      const info = COUNTRY_DATA[code];
+      const status = info ? getStatus(code) : null;
+      ctx.beginPath();
+      mapFit.pathGen(feature);
+      ctx.fillStyle = !info
+        ? theme.neutral
+        : status === "visited"
+        ? theme.visited
+        : status === "wishlist"
+        ? theme.wishlist
+        : theme.unvisited;
+      ctx.fill();
+      ctx.lineWidth = Math.max(0.4, width / 1800);
+      ctx.strokeStyle = theme.stroke;
+      ctx.stroke();
+    });
+    ctx.restore();
+
+    mapBottom = mapTop + mapH;
+  }
+
+  // --- Legende: Farbschlüssel, damit das Bild auch ohne App-Kontext verständlich ist ---
+  const legendItems = [
+    { color: theme.visited, label: "Besucht" },
+    { color: theme.wishlist, label: "Wunschliste" },
+    { color: theme.unvisited, label: "Nicht besucht" }
+  ];
+  ctx.font = "600 " + legendFontSize + "px " + fontStack;
+  const dotR = legendFontSize * 0.38;
+  const itemGap = width * 0.025;
+  const dotTextGap = legendFontSize * 0.45;
+  const itemWidths = legendItems.map((item) => dotR * 2 + dotTextGap + ctx.measureText(item.label).width);
+  const legendRowW = itemWidths.reduce((a, b) => a + b, 0) + itemGap * (legendItems.length - 1);
+  let legendX = width / 2 - legendRowW / 2;
+  const legendY = mapBottom + gapMapLegend + legendHeight / 2;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  legendItems.forEach((item, i) => {
+    ctx.beginPath();
+    ctx.arc(legendX + dotR, legendY, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = item.color;
+    ctx.fill();
+    ctx.fillStyle = theme.subtitle;
+    ctx.fillText(item.label, legendX + dotR * 2 + dotTextGap, legendY);
+    legendX += itemWidths[i] + itemGap;
+  });
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // --- Statistik: direkt unter der Legende ---
+  const statsTop = legendY + legendHeight / 2 + gapLegendStats;
+  let y = statsTop + bigSize * 0.85;
+  ctx.font = "900 " + bigSize + "px " + EXPORT_FONT_DISPLAY;
+  ctx.fillStyle = theme.accent;
+  ctx.fillText(percent + "%", width / 2, y);
+
+  y += detailSize * 1.7;
+  ctx.font = "600 " + detailSize + "px " + fontStack;
+  ctx.fillStyle = theme.subtitle;
+  ctx.fillText(stats.visited + " von " + stats.total + " Ländern besucht", width / 2, y);
+
+  if (wishlistCount > 0) {
+    y += smallSize * 1.8;
+    ctx.font = "500 " + smallSize + "px " + fontStack;
+    ctx.fillStyle = theme.subtitle;
+    const wishlistText = (wishlistCount === 1 ? "1 Land" : wishlistCount + " Länder") + " auf der Wunschliste";
+    ctx.fillText(wishlistText, width / 2, y);
+  }
+}
+
+/* Feste Tier-Farben (identisch zu den CSS --tier-*-Variablen) – Canvas kann
+   keine CSS-Variablen lesen, und die Tier-Farben sollen bewusst unabhängig
+   vom gewählten Export-Farbthema bleiben (gleiche feste Bedeutung wie in der
+   Live-Ansicht). Nur die Textfarbe auf dem S-Band ist weiß, A–D nutzen die
+   feste dunkle "Stempel"-Textfarbe der App (nicht die Theme-Titelfarbe, die
+   auf den hellen A–D-Tönen sonst schlecht lesbar wäre). */
+const TIER_EXPORT_COLORS = {
+  S: "#b8512a",
+  A: "#c9823c",
+  B: "#c89a3c",
+  C: "#8a9b5e",
+  D: "#9c938a"
+};
+const TIER_DARK_TEXT = "#2a2420";
+
+function drawTierListExportImage(ctx, width, height, opts) {
+  const theme = EXPORT_THEMES[opts.theme];
+
+  ctx.clearRect(0, 0, width, height);
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, theme.background[0]);
+  grad.addColorStop(1, theme.background[1]);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+
+  const frameInset = Math.min(width, height) * 0.025;
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = theme.accent;
+  ctx.lineWidth = Math.max(1, width / 600);
+  ctx.setLineDash([width / 70, width / 90]);
+  ctx.strokeRect(frameInset, frameInset, width - frameInset * 2, height - frameInset * 2);
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  const padX = width * 0.05;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+
+  // --- Titel: identische Logik wie beim Karten-Export ---
+  const title = (opts.title && opts.title.trim()) || defaultTitle("tierlist");
+  const maxTitleWidth = width - padX * 2;
+  let titleSize = Math.round(width * 0.065);
+  const minTitleSize = Math.round(width * 0.038);
+  ctx.letterSpacing = "-0.5px";
+  ctx.font = "700 " + titleSize + "px " + EXPORT_FONT_DISPLAY;
+  while (ctx.measureText(title).width > maxTitleWidth && titleSize > minTitleSize) {
+    titleSize -= 2;
+    ctx.font = "700 " + titleSize + "px " + EXPORT_FONT_DISPLAY;
+  }
+  const titleLines = ctx.measureText(title).width > maxTitleWidth ? wrapText(ctx, title, maxTitleWidth) : [title];
+  const titleBlockH = titleSize + (titleLines.length - 1) * titleSize * 1.15;
+  ctx.letterSpacing = "0px";
+
+  const outerMargin = height * 0.05;
+  const gapTitleContent = height * 0.04;
+  const footerH = height * 0.035;
+
+  ctx.fillStyle = theme.title;
+  let ty = outerMargin + titleSize * 0.88;
+  titleLines.forEach((line) => {
+    ctx.font = "700 " + titleSize + "px " + EXPORT_FONT_DISPLAY;
+    ctx.fillText(line, width / 2, ty);
+    ty += titleSize * 1.15;
+  });
+
+  // --- Länder nach Tier gruppiert + sortiert, wie renderTierList() ---
+  const scoredByTier = {};
+  TIER_DEFS.forEach((t) => (scoredByTier[t.id] = []));
+  Array.from(state.visited)
+    .filter((code) => COUNTRY_DATA[code])
+    .forEach((code) => {
+      const score = computeCountryScore(code);
+      if (!score) return;
+      scoredByTier[tierForScore(score.avg).id].push({ code, score });
+    });
+  Object.keys(scoredByTier).forEach((id) => scoredByTier[id].sort((a, b) => b.score.avg - a.score.avg));
+  const ratedCount = Object.keys(scoredByTier).reduce((sum, id) => sum + scoredByTier[id].length, 0);
+
+  const bandLabelW = width * 0.1;
+  const gapLabelChips = width * 0.018;
+  const contentW = width - padX * 2 - bandLabelW - gapLabelChips;
+  const availableH = Math.max(80, height - outerMargin - (outerMargin + titleBlockH + gapTitleContent) - footerH);
+
+  function measureLayout(scale) {
+    const chipW = width * 0.1 * scale;
+    const chipH = width * 0.1 * scale;
+    const gap = width * 0.016 * scale;
+    const rowGap = gap * 0.7;
+    const chipPadV = width * 0.012 * scale;
+    const minBandH = width * 0.095 * scale;
+    const chipsPerRow = Math.max(1, Math.floor((contentW + gap) / (chipW + gap)));
+    let total = 0;
+    const bandHeights = TIER_DEFS.map((tier) => {
+      const count = scoredByTier[tier.id].length;
+      const rows = count ? Math.ceil(count / chipsPerRow) : 1;
+      const bandH = Math.max(minBandH, rows * chipH + (rows - 1) * rowGap + chipPadV * 2);
+      total += bandH;
+      return bandH;
+    });
+    return { total, bandHeights, chipW, chipH, gap, rowGap, chipPadV, chipsPerRow };
+  }
+
+  let scale = 1;
+  let layout = measureLayout(scale);
+  for (let i = 0; i < 6 && Math.abs(layout.total - availableH) > availableH * 0.04; i++) {
+    scale *= availableH / layout.total;
+    scale = Math.max(0.55, Math.min(1.8, scale));
+    layout = measureLayout(scale);
+  }
+
+  // --- Bänder zeichnen ---
+  let bandTop = outerMargin + titleBlockH + gapTitleContent;
+  const tierLetterSize = Math.round(bandLabelW * 0.42);
+  const tierNameSize = Math.round(bandLabelW * 0.11);
+  const flagSize = Math.round(layout.chipW * 0.3);
+  const captionSize = Math.round(layout.chipW * 0.145);
+  const scoreSize = Math.round(captionSize * 0.85);
+
+  TIER_DEFS.forEach((tier, i) => {
+    const bandH = layout.bandHeights[i];
+    const entries = scoredByTier[tier.id];
+    const tierColor = TIER_EXPORT_COLORS[tier.id];
+    const labelTextColor = tier.id === "S" ? "#ffffff" : TIER_DARK_TEXT;
+
+    // Farbband links
+    ctx.fillStyle = tierColor;
+    ctx.fillRect(padX, bandTop, bandLabelW, bandH);
+    ctx.fillStyle = labelTextColor;
+    ctx.textAlign = "center";
+    ctx.font = "800 " + tierLetterSize + "px " + EXPORT_FONT_MONO;
+    ctx.fillText(tier.label, padX + bandLabelW / 2, bandTop + bandH / 2 - tierLetterSize * 0.05);
+    ctx.font = "700 " + tierNameSize + "px " + EXPORT_FONT_MONO;
+    ctx.globalAlpha = 0.8;
+    ctx.fillText(tier.name.toUpperCase(), padX + bandLabelW / 2, bandTop + bandH / 2 + tierLetterSize * 0.55);
+    ctx.globalAlpha = 1;
+
+    // Trennlinie zwischen Bändern
+    if (i > 0) {
+      ctx.strokeStyle = theme.stroke;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padX, bandTop);
+      ctx.lineTo(width - padX, bandTop);
+      ctx.stroke();
+    }
+
+    const chipsLeft = padX + bandLabelW + gapLabelChips;
+    if (!entries.length) {
+      ctx.fillStyle = theme.subtitle;
+      ctx.font = "italic 500 " + captionSize + "px " + EXPORT_FONT_BODY;
+      ctx.textAlign = "left";
+      ctx.fillText("Noch keine Länder", chipsLeft, bandTop + bandH / 2 + captionSize * 0.3);
+    } else {
+      entries.forEach((e, idx) => {
+        const col = idx % layout.chipsPerRow;
+        const row = Math.floor(idx / layout.chipsPerRow);
+        const cx = chipsLeft + col * (layout.chipW + layout.gap);
+        const cy = bandTop + layout.chipPadV + row * (layout.chipH + layout.rowGap);
+
+        ctx.fillStyle = theme.neutral;
+        ctx.strokeStyle = theme.stroke;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(cx, cy, layout.chipW, layout.chipH, layout.chipW * 0.1);
+        ctx.fill();
+        ctx.stroke();
+
+        const centerX = cx + layout.chipW / 2;
+        let cursorY = cy + layout.chipH * 0.3;
+
+        // Flagge bewusst ohne die App-eigenen Webfonts rendern, damit der
+        // Browser zuverlässig auf die System-Emoji-Schrift zurückfällt.
+        ctx.font = flagSize + "px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(countryFlag(e.code), centerX, cursorY);
+
+        cursorY += captionSize * 1.3;
+        ctx.fillStyle = theme.title;
+        ctx.font = "700 " + captionSize + "px " + EXPORT_FONT_BODY;
+        const nameLines = wrapText(ctx, COUNTRY_DATA[e.code].name, layout.chipW - layout.chipW * 0.12);
+        nameLines.forEach((line) => {
+          ctx.fillText(line, centerX, cursorY);
+          cursorY += captionSize * 1.15;
+        });
+
+        ctx.fillStyle = theme.subtitle;
+        ctx.font = "600 " + scoreSize + "px " + EXPORT_FONT_MONO;
+        ctx.fillText(formatScore(e.score.avg), centerX, cursorY);
+      });
+    }
+
+    bandTop += bandH;
+  });
+
+  // --- Fußzeile, nur falls nach dem Fit noch sichtbar Platz ist ---
+  if (height - bandTop > footerH * 0.6) {
+    ctx.fillStyle = theme.subtitle;
+    ctx.font = "500 " + Math.round(width * 0.018) + "px " + EXPORT_FONT_BODY;
+    ctx.textAlign = "center";
+    ctx.fillText(ratedCount + (ratedCount === 1 ? " Land bewertet" : " Länder bewertet"), width / 2, height - footerH * 0.35);
+  }
+}
+
+/* --- Dialog-Steuerung --- */
+const exportModalEl = document.getElementById("exportModal");
+const exportPreviewCanvas = document.getElementById("exportPreviewCanvas");
+const exportTitleInput = document.getElementById("exportTitleInput");
+
+function setPreviewCanvasSize() {
+  const format = EXPORT_FORMATS[exportState.format];
+  const maxDim = 480;
+  const scale = maxDim / Math.max(format.width, format.height);
+  exportPreviewCanvas.width = Math.round(format.width * scale);
+  exportPreviewCanvas.height = Math.round(format.height * scale);
+}
+
+function updateExportPreview() {
+  setPreviewCanvasSize();
+  const ctx = exportPreviewCanvas.getContext("2d");
+  drawExportImage(ctx, exportPreviewCanvas.width, exportPreviewCanvas.height, exportState);
+}
+
+const scheduleExportPreviewUpdate = debounce(updateExportPreview, 80);
+
+async function openExportModal(content) {
+  if (content === "map" && !worldFeatures) {
+    alert("Die Karte wird noch geladen. Bitte versuche es gleich noch einmal.");
+    return;
+  }
+  exportState.content = content;
+  document.querySelectorAll("#contentPills .pill").forEach((b) => b.classList.toggle("active", b.dataset.content === content));
+  if (!userEditedTitle) {
+    exportState.title = defaultTitle(content);
+    exportTitleInput.value = exportState.title;
+  }
+  exportModalEl.classList.remove("hidden");
+  await ensureExportFontsLoaded();
+  updateExportPreview();
+}
+
+function closeExportModal() {
+  exportModalEl.classList.add("hidden");
+}
+
+document.getElementById("exportBtn").addEventListener("click", () => openExportModal("map"));
+document.getElementById("exportTierListBtn").addEventListener("click", () => openExportModal("tierlist"));
+document.getElementById("exportModalClose").addEventListener("click", closeExportModal);
+exportModalEl.addEventListener("click", (e) => {
+  if (e.target === exportModalEl) closeExportModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !exportModalEl.classList.contains("hidden")) closeExportModal();
+});
+
+exportTitleInput.addEventListener("input", () => {
+  userEditedTitle = exportTitleInput.value.trim().length > 0;
+  exportState.title = exportTitleInput.value;
+  scheduleExportPreviewUpdate();
+});
+
+document.querySelectorAll("#contentPills .pill").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#contentPills .pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    exportState.content = btn.dataset.content;
+    if (!userEditedTitle) {
+      exportState.title = defaultTitle(exportState.content);
+      exportTitleInput.value = exportState.title;
+    }
+    updateExportPreview();
+  });
+});
+
+document.querySelectorAll("#formatPills .pill").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#formatPills .pill").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    exportState.format = btn.dataset.format;
+    updateExportPreview();
+  });
+});
+
+document.querySelectorAll("#themeSwatches .swatch").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#themeSwatches .swatch").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    exportState.theme = btn.dataset.theme;
+    updateExportPreview();
+  });
+});
+
+const EXPORT_RESOLUTION_SCALE = 2; // Export-PNGs doppelt so hochauflösend wie die Format-Logikgröße
+
+async function renderExportCanvas(scale) {
+  await ensureExportFontsLoaded();
+  const format = EXPORT_FORMATS[exportState.format];
+  const canvas = document.createElement("canvas");
+  canvas.width = format.width * scale;
+  canvas.height = format.height * scale;
+  const ctx = canvas.getContext("2d");
+  drawExportImage(ctx, canvas.width, canvas.height, exportState);
+  const titleForFile = (exportState.title && exportState.title.trim()) || defaultTitle(exportState.content);
+  const filename = slugify(titleForFile) + "-" + exportState.content + "-" + exportState.format + "-" + todayStr() + ".png";
+  return { canvas, filename };
+}
+
+document.getElementById("exportDownloadBtn").addEventListener("click", async () => {
+  const { canvas, filename } = await renderExportCanvas(EXPORT_RESOLUTION_SCALE);
+  triggerDownload(canvas.toDataURL("image/png"), filename);
+});
+
+/* --- Teilen (Web Share API, nur wenn vom Browser unterstützt, z. B. mobil) --- */
+const exportShareBtnEl = document.getElementById("exportShareBtn");
+if (typeof navigator.share === "function") {
+  exportShareBtnEl.classList.remove("hidden");
+
+  exportShareBtnEl.addEventListener("click", async () => {
+    const { canvas, filename } = await renderExportCanvas(EXPORT_RESOLUTION_SCALE);
+    canvas.toBlob(async (blob) => {
+      if (!blob) return;
+      const file = new File([blob], filename, { type: "image/png" });
+
+      if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+        triggerDownload(URL.createObjectURL(blob), filename);
+        return;
+      }
+      try {
+        await navigator.share({ files: [file], title: (exportState.title && exportState.title.trim()) || defaultTitle(exportState.content) });
+      } catch (err) {
+        if (err && err.name !== "AbortError") {
+          console.warn("Teilen fehlgeschlagen:", err);
+        }
+      }
+    }, "image/png");
+  });
+}
+
+/* ==================================================================
+   Daten-Verwaltung: Backup speichern/laden, Zurücksetzen
+   ================================================================== */
+
+/**
+ * Aktualisiert Karte, Länderliste, Statistik und Erfolge für ALLE Länder auf
+ * einmal. Wird nach Reset/Import gebraucht, wenn sich der Status vieler
+ * Länder gleichzeitig ändert (statt wie setStatus() nur für ein einzelnes).
+ */
+function refreshAllCountryUI() {
+  Object.keys(COUNTRY_DATA).forEach((code) => {
+    updateCountryFill(code);
+    updateListRow(code);
+  });
+  renderStats();
+  renderFunStats();
+  renderAchievements({ silent: true });
+  renderStamps();
+  renderRatingsTab();
+}
+
+function exportBackup() {
+  const payload = {
+    version: 1,
+    visited: Array.from(state.visited),
+    wishlist: Array.from(state.wishlist),
+    visitDates: Object.fromEntries(state.visitDates),
+    ratings: Object.fromEntries(state.ratings)
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  triggerDownload(url, "reise-tracker-backup-" + todayStr() + ".json");
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function applyImportedState(parsed) {
+  state.visited.clear();
+  state.wishlist.clear();
+  state.visitDates.clear();
+  state.ratings.clear();
+  (parsed.visited || []).forEach((code) => {
+    const c = String(code);
+    if (COUNTRY_DATA[c]) state.visited.add(c);
+  });
+  (parsed.wishlist || []).forEach((code) => {
+    const c = String(code);
+    if (COUNTRY_DATA[c] && !state.visited.has(c)) state.wishlist.add(c);
+  });
+  const dates = parsed.visitDates || {};
+  Object.keys(dates).forEach((code) => {
+    if (dates[code] && state.visited.has(String(code))) state.visitDates.set(String(code), dates[code]);
+  });
+  const ratings = parsed.ratings || {};
+  Object.keys(ratings).forEach((code) => {
+    const obj = ratings[code];
+    if (obj && typeof obj === "object" && state.visited.has(String(code))) state.ratings.set(String(code), obj);
+  });
+  saveState();
+  refreshAllCountryUI();
+}
+
+function importBackupFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try {
+      parsed = JSON.parse(String(reader.result));
+    } catch (err) {
+      alert("Diese Datei konnte nicht als Reise-Tracker-Backup gelesen werden.");
+      return;
+    }
+    if (!parsed || (!Array.isArray(parsed.visited) && !Array.isArray(parsed.wishlist))) {
+      alert("Diese Datei konnte nicht als Reise-Tracker-Backup gelesen werden.");
+      return;
+    }
+    if (!confirm("Der aktuelle Stand wird durch dieses Backup ersetzt. Fortfahren?")) return;
+    applyImportedState(parsed);
+  };
+  reader.onerror = () => alert("Die Datei konnte nicht gelesen werden.");
+  reader.readAsText(file);
+}
+
+document.getElementById("backupExportBtn").addEventListener("click", exportBackup);
+
+const backupFileInputEl = document.getElementById("backupFileInput");
+document.getElementById("backupImportBtn").addEventListener("click", () => backupFileInputEl.click());
+backupFileInputEl.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (file) importBackupFromFile(file);
+  backupFileInputEl.value = "";
+});
+
+document.getElementById("resetBtn").addEventListener("click", () => {
+  if (!confirm("Wirklich alle gespeicherten Reisedaten löschen? Das kann nicht rückgängig gemacht werden.")) return;
+  state.visited.clear();
+  state.wishlist.clear();
+  state.visitDates.clear();
+  state.ratings.clear();
+  saveState();
+  refreshAllCountryUI();
+});
+
+/* ==================================================================
+   Bootstrap
+   ================================================================== */
+function init() {
+  loadState();
+  renderCountryList();
+  renderStats();
+  renderFunStats();
+  renderAchievements({ silent: true });
+  renderStamps();
+  renderRatingsTab();
+  initMap();
+}
+
+document.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
